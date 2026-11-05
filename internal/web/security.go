@@ -119,7 +119,7 @@ func ClientIP(r *http.Request) string {
 	return host
 }
 
-// LoginLimiter allows at most max failed logins per key (client IP) inside a
+// LoginLimiter allows at most max login attempts per key (client IP) inside a
 // sliding window. It is safe for concurrent use.
 type LoginLimiter struct {
 	max    int
@@ -155,22 +155,25 @@ func (l *LoginLimiter) recentLocked(ip string, now time.Time) []time.Time {
 	return ts
 }
 
-// Allow reports whether ip may attempt a login.
-func (l *LoginLimiter) Allow(ip string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return len(l.recentLocked(ip, l.now())) < l.max
-}
-
 // Begin atomically reserves a login attempt for ip: it refuses (false) when
 // the window already holds max attempts, otherwise it records one and returns
-// true. Unlike Allow followed by Fail, parallel requests cannot all pass the
-// check before any of them is recorded. A successful login calls Reset, an
-// attempt that did not reach a verdict (server unreachable) calls Cancel.
+// true. Check and record are one step under the lock, so parallel requests
+// cannot all pass the check before any of them is recorded. A reservation
+// that ends in a wrong password simply stays as the recorded failure; a
+// successful login calls Reset, an attempt that did not reach a verdict
+// (server unreachable) calls Cancel. Once a minute Begin also forgets the
+// keys of every IP whose attempts all fell out of the window, so memory stays
+// bounded whichever IPs come back.
 func (l *LoginLimiter) Begin(ip string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
+	if !now.Before(l.sweepAt) {
+		l.sweepAt = now.Add(time.Minute)
+		for k := range l.failures {
+			l.recentLocked(k, now)
+		}
+	}
 	ts := l.recentLocked(ip, now)
 	if len(ts) >= l.max {
 		return false
@@ -188,20 +191,6 @@ func (l *LoginLimiter) Cancel(ip string) {
 	} else {
 		delete(l.failures, ip)
 	}
-}
-
-// Fail records a failed login attempt from ip.
-func (l *LoginLimiter) Fail(ip string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := l.now()
-	if !now.Before(l.sweepAt) { // bound memory: forget stale keys once a minute
-		l.sweepAt = now.Add(time.Minute)
-		for k := range l.failures {
-			l.recentLocked(k, now)
-		}
-	}
-	l.failures[ip] = append(l.recentLocked(ip, now), now)
 }
 
 // Reset forgets the failures of ip (after a successful login).

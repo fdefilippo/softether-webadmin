@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -188,34 +189,48 @@ func TestLoginLimiter(t *testing.T) {
 	clk := newClock()
 	l := NewLoginLimiter(5, 15*time.Minute, clk.Now)
 	for i := 0; i < 5; i++ {
-		if !l.Allow("1.2.3.4") {
-			t.Fatalf("Allow false after %d failures", i)
+		if !l.Begin("1.2.3.4") {
+			t.Fatalf("Begin false after %d attempts", i)
 		}
-		l.Fail("1.2.3.4")
 	}
-	if l.Allow("1.2.3.4") {
-		t.Fatal("Allow must be false after 5 failures")
+	if l.Begin("1.2.3.4") {
+		t.Fatal("Begin must be false after 5 attempts")
 	}
-	if !l.Allow("5.6.7.8") {
+	if !l.Begin("5.6.7.8") {
 		t.Fatal("another IP must be unaffected")
 	}
 	clk.Add(14 * time.Minute)
-	if l.Allow("1.2.3.4") {
+	if l.Begin("1.2.3.4") {
 		t.Fatal("still blocked inside the window")
 	}
 	clk.Add(2 * time.Minute)
-	if !l.Allow("1.2.3.4") {
-		t.Fatal("Allow must be true again after the window")
+	if !l.Begin("1.2.3.4") {
+		t.Fatal("Begin must be true again after the window")
 	}
 }
 
 func TestLoginLimiterReset(t *testing.T) {
 	l := NewLoginLimiter(2, time.Hour, newClock().Now)
-	l.Fail("a")
-	l.Fail("a")
+	l.Begin("a")
+	l.Begin("a")
 	l.Reset("a")
-	if !l.Allow("a") {
+	if !l.Begin("a") {
 		t.Fatal("Reset must clear the failures")
+	}
+}
+
+func TestLoginLimiterSweepsStaleKeysInBegin(t *testing.T) {
+	clk := newClock()
+	l := NewLoginLimiter(5, 15*time.Minute, clk.Now)
+	for i := 0; i < 1000; i++ {
+		l.Begin(fmt.Sprintf("2001:db8::%x", i))
+	}
+	clk.Add(15*time.Minute + time.Minute + time.Second) // past the window and the sweep interval
+	l.Begin("192.0.2.1")                                // a different IP triggers the sweep
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.failures) != 1 {
+		t.Fatalf("%d keys in memory, want only the current IP", len(l.failures))
 	}
 }
 
@@ -253,9 +268,6 @@ func TestLoginLimiterBeginIsAtomic(t *testing.T) {
 	wg.Wait()
 	if granted.Load() != 3 {
 		t.Fatalf("Begin granted %d attempts, want exactly 3", granted.Load())
-	}
-	if l.Allow("1.2.3.4") {
-		t.Fatal("Allow must be false once the window is full")
 	}
 	l.Cancel("1.2.3.4")
 	if !l.Begin("1.2.3.4") || l.Begin("1.2.3.4") {
