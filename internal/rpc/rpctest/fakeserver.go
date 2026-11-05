@@ -16,6 +16,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -33,6 +34,9 @@ type FakeServer struct {
 	mu       sync.Mutex
 	password string
 	requests int
+	methods  map[string]int
+	stopOn   string       // method after which the server stops, "" for none
+	dropOn   string       // method after which the connection is dropped, "" for none
 	srv      *http.Server // nil while stopped
 }
 
@@ -136,6 +140,32 @@ func (f *FakeServer) SetPassword(p string) {
 	f.mu.Unlock()
 }
 
+// StopAfter arms a one-shot hook: when the server receives method it applies
+// it, then stops (as by Stop) and aborts the connection without writing a
+// response. This simulates "request possibly applied, response lost, server
+// gone". Call Start to bring the server back.
+func (f *FakeServer) StopAfter(method string) {
+	f.mu.Lock()
+	f.stopOn = method
+	f.mu.Unlock()
+}
+
+// DropAfter arms a one-shot hook: when the server receives method it applies
+// it and aborts the connection without writing a response, but keeps running.
+func (f *FakeServer) DropAfter(method string) {
+	f.mu.Lock()
+	f.dropOn = method
+	f.mu.Unlock()
+}
+
+// MethodCount returns how many times a JSON-RPC method was received (after
+// authentication and parsing).
+func (f *FakeServer) MethodCount(method string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.methods[method]
+}
+
 // Requests returns the number of HTTP requests received, including refused
 // ones.
 func (f *FakeServer) Requests() int {
@@ -184,6 +214,31 @@ func (f *FakeServer) handle(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, nil, 1, "parse error")
 		return
 	}
+	f.mu.Lock()
+	if f.methods == nil {
+		f.methods = map[string]int{}
+	}
+	f.methods[req.Method]++
+	stop, drop := f.stopOn == req.Method, f.dropOn == req.Method
+	if stop {
+		f.stopOn = ""
+	}
+	if drop {
+		f.dropOn = ""
+	}
+	f.mu.Unlock()
+	if stop || drop {
+		// Apply the method, discard the response, kill the connection.
+		f.dispatch(httptest.NewRecorder(), req)
+		if stop {
+			f.Stop()
+		}
+		panic(http.ErrAbortHandler)
+	}
+	f.dispatch(w, req)
+}
+
+func (f *FakeServer) dispatch(w http.ResponseWriter, req request) {
 	switch req.Method {
 	case "Test":
 		var p struct {
