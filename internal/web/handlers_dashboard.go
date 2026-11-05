@@ -1,7 +1,10 @@
 package web
 
 import (
+	"errors"
+	"io/fs"
 	"net/http"
+	"syscall"
 
 	"github.com/fdefilippo/softether-webadmin/internal/audit"
 	"github.com/fdefilippo/softether-webadmin/internal/rpc"
@@ -65,7 +68,14 @@ func (s *Server) restrictAdminIP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.audit(r, audit.Event{Action: "adminip_restricted", Role: roleServerAdmin, Result: "error"})
 		s.d.Audit.Slog().Error("restrict adminip.txt failed", "err", err.Error())
-		http.Error(w, s.text(r, "error.internal"), http.StatusInternalServerError)
+		msg := s.text(r, "error.internal")
+		if errors.Is(err, syscall.EROFS) || errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) {
+			// Typically the VPN server's state directory was created after
+			// the daemon started, so it is outside the unit's writable paths
+			// (ReadWritePaths=-/var/lib/softether), or adminip_path is wrong.
+			msg = s.text(r, "adminip.write_failed", s.d.Cfg.AdminIPPath)
+		}
+		http.Error(w, msg, http.StatusInternalServerError)
 		return
 	}
 	s.audit(r, audit.Event{Action: "adminip_restricted", Role: roleServerAdmin, Result: "ok"})

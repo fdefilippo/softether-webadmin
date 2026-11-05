@@ -5,8 +5,10 @@
 #   packaging/test-install.sh /dist/softether-webadmin_1.2.3_amd64.deb
 #
 # Checks: install, "version", unit file, systemd-analyze verify, adminip.txt
-# creation (0600) when /var/lib/softether pre-exists, an existing adminip.txt
-# left byte-identical on reinstall, and clean removal.
+# creation (0600) when /var/lib/softether pre-exists or the FHS vpnserver unit
+# is installed (dir created 0700), nothing created and a NOTE printed
+# otherwise, an existing adminip.txt left byte-identical on reinstall, and
+# clean removal.
 set -eu
 
 pkg=${1:?usage: test-install.sh <package-file>}
@@ -41,12 +43,20 @@ esac
 
 mode_of() { stat -c %a "$1"; }
 
-# Scenario A: /var/lib/softether does not exist -> nothing must be created there.
+# Scenario A: /var/lib/softether does not exist and no FHS vpnserver unit ->
+# nothing must be created there, and a NOTE must say what to do.
+fhs_unit=/usr/lib/systemd/system/softether-vpnserver.service
+[ ! -e "$fhs_unit" ] || fail "test image already has $fhs_unit"
 rm -rf "$adminip_dir"
 pkg_install >"$out" 2>&1 || { cat "$out"; fail "install (no vpnserver dir)"; }
 cat "$out"
 [ ! -e "$adminip_dir" ] || fail "$adminip_dir was created although it did not exist"
 ok "install without $adminip_dir leaves it alone"
+grep -q "^NOTE: $adminip_dir does not exist, so $adminip was not created" "$out" \
+	|| fail "postinstall did not explain that adminip.txt was not created"
+grep -q 'After the first start of softether-vpnserver' "$out" \
+	|| fail "postinstall did not say what to do after the first start of softether-vpnserver"
+ok "postinstall prints the 'adminip.txt not created' note"
 grep -q 'systemctl enable --now softether-webadmin' "$out" \
 	|| fail "postinstall did not print the 'systemctl enable --now' hint"
 ok "postinstall prints the enable hint"
@@ -78,6 +88,33 @@ pkg_remove >/dev/null 2>&1 || fail "remove"
 [ ! -e /usr/bin/softether-webadmin ] || fail "binary left after remove"
 [ ! -e "$unit" ] || fail "unit left after remove"
 ok "remove"
+
+# Scenario A2: FHS vpnserver unit installed (StateDirectory=softether), its
+# state dir not created yet -> dir created 0700 and adminip.txt 0600.
+mkdir -p "$(dirname "$fhs_unit")"
+cat >"$fhs_unit" <<'UNIT'
+[Unit]
+Description=SoftEther VPN Server (test stub)
+
+[Service]
+ExecStart=/usr/libexec/softether/vpnserver/vpnserver execsvc
+StateDirectory=softether
+StateDirectoryMode=0700
+UNIT
+rm -rf "$adminip_dir"
+pkg_install >"$out" 2>&1 || { cat "$out"; fail "install (FHS unit, no vpnserver dir)"; }
+cat "$out"
+[ -d "$adminip_dir" ] || fail "$adminip_dir not created although the FHS unit is installed"
+[ "$(mode_of "$adminip_dir")" = 700 ] || fail "$adminip_dir mode is $(mode_of "$adminip_dir"), want 700"
+[ -f "$adminip" ] || fail "adminip.txt not created with the FHS unit installed"
+[ "$(mode_of "$adminip")" = 600 ] || fail "adminip.txt mode is $(mode_of "$adminip"), want 600"
+grep -qx '127.0.0.1/32' "$adminip" || fail "adminip.txt lacks 127.0.0.1/32"
+grep -qx '::1/128' "$adminip" || fail "adminip.txt lacks ::1/128"
+grep -q "^NOTE: created $adminip" "$out" || fail "missing 'created' note"
+ok "FHS unit installed: $adminip_dir created 0700 and adminip.txt 0600"
+pkg_remove >/dev/null 2>&1 || fail "remove (FHS unit)"
+rm -f "$fhs_unit"
+rm -rf "$adminip_dir"
 
 # Scenario B: /var/lib/softether pre-exists (0700 root, like vpnserver) -> adminip.txt created 0600.
 mkdir -p "$adminip_dir"

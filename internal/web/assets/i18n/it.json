@@ -74,5 +74,6 @@
   "adminip.confirm": "Confermo: adminip.txt verrà riscritto per consentire solo il loopback (viene conservata una copia di backup).",
   "adminip.restrict": "Limita a loopback",
   "adminip.done": "Ora adminip.txt consente solo il loopback. Backup del file precedente: %s",
-  "adminip.done_nobackup": "Ora adminip.txt consente solo il loopback (non esisteva un file precedente)."
+  "adminip.done_nobackup": "Ora adminip.txt consente solo il loopback (non esisteva un file precedente).",
+  "adminip.write_failed": "Non è stato possibile scrivere adminip.txt in %s. Se il VPN Server è stato installato o avviato per la prima volta dopo softether-webadmin, riavviare softether-webadmin (systemctl restart softether-webadmin) perché possa scriverci, poi riprovare; verificare anche adminip_path in /etc/softether-webadmin/config.toml."
 }

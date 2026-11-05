@@ -1126,3 +1126,48 @@ func TestCancelledProbeChangesNothing(t *testing.T) {
 		t.Fatalf("warning for a cancelled probe:\n%s", e.audit.String())
 	}
 }
+
+// I4: when adminip.txt cannot be written because its directory is missing
+// (VPN server installed after the daemon started), read-only (outside the
+// unit's ReadWritePaths) or not writable, the operator is told what to do.
+func TestRestrictAdminIPUnwritableExplainsTheFix(t *testing.T) {
+	cases := map[string]func(t *testing.T, e *env) string{
+		"missing dir": func(t *testing.T, e *env) string {
+			return filepath.Join(t.TempDir(), "softether", "adminip.txt")
+		},
+		"read-only dir": func(t *testing.T, e *env) string {
+			if os.Geteuid() == 0 {
+				t.Skip("root ignores directory permissions")
+			}
+			dir := filepath.Join(t.TempDir(), "softether")
+			if err := os.Mkdir(dir, 0o500); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.Chmod(dir, 0o700) })
+			return filepath.Join(dir, "adminip.txt")
+		},
+	}
+	for name, mk := range cases {
+		t.Run(name, func(t *testing.T) {
+			e := configured(t)
+			path := mk(t, e)
+			e.srv.d.Cfg.AdminIPPath = path
+			for _, lang := range []string{"en", "it"} {
+				b := e.browser()
+				b.cookies[LangCookie] = lang
+				b.mustLogin(adminPassword)
+				rec := b.post("/adminip/restrict", url.Values{"csrf": {b.sessionCSRF()}, "confirm": {"yes"}})
+				if rec.Code != http.StatusInternalServerError {
+					t.Fatalf("%s: code = %d", lang, rec.Code)
+				}
+				want := e.cat.T(lang, "adminip.write_failed", path)
+				if !strings.Contains(rec.Body.String(), want) || strings.Contains(want, "%!") {
+					t.Fatalf("%s: body = %q, want %q", lang, rec.Body.String(), want)
+				}
+				if !strings.Contains(want, "softether-webadmin") || !strings.Contains(want, "adminip_path") {
+					t.Fatalf("%s: message must name the restart and adminip_path: %q", lang, want)
+				}
+			}
+		})
+	}
+}
