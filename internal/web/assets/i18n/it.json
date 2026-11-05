@@ -44,7 +44,7 @@
 
   "unreachable.title": "VPN Server non raggiungibile",
   "unreachable.body": "Non è possibile raggiungere il VPN Server oppure non ha risposto in tempo.",
-  "unreachable.hint": "La sessione resta valida. Verificare che vpnserver sia in esecuzione; questa pagina riprende al suo ritorno.",
+  "unreachable.hint": "La sessione resta valida. Verificare che vpnserver sia in esecuzione; questa pagina ricontrolla ogni pochi secondi e riprende al suo ritorno.",
   "unreachable.retry": "Riprova",
 
   "certmismatch.title": "Certificato del VPN Server cambiato",

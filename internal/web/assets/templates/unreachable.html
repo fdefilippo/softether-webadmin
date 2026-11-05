@@ -2,5 +2,6 @@
 <h1>{{$.T "unreachable.title"}}</h1>
 <p class="error" role="alert">{{$.T "unreachable.body"}}</p>
 <p>{{$.T "unreachable.hint"}}</p>
+<div hx-get="/status?from=unreachable" hx-trigger="every 3s" hx-swap="none"></div>
 <p><a href="/">{{$.T "unreachable.retry"}}</a></p>
 {{end}}

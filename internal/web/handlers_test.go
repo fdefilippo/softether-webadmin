@@ -1171,3 +1171,29 @@ func TestRestrictAdminIPUnwritableExplainsTheFix(t *testing.T) {
 		})
 	}
 }
+
+// T7: the unreachable page polls the server state and, once the server is
+// back, sends the browser on (HX-Redirect to "/", which the gate routes), so
+// that "this page recovers when it is back" is true.
+func TestUnreachablePageRecovers(t *testing.T) {
+	e := configured(t)
+	b := e.browser()
+	b.mustLogin(adminPassword)
+	e.fake.Stop()
+	e.srv.ProbeOnce(context.Background())
+	rec := b.get("/unreachable")
+	wantBody(t, rec, `hx-get="/status?from=unreachable"`, `hx-trigger="every 3s"`)
+
+	poll := func() *httptest.ResponseRecorder {
+		return b.do("GET", "/status?from=unreachable", nil, map[string]string{"HX-Request": "true"})
+	}
+	if rec := poll(); rec.Code != 200 || rec.Header().Get("HX-Redirect") != "" {
+		t.Fatalf("still down: code %d HX-Redirect %q", rec.Code, rec.Header().Get("HX-Redirect"))
+	}
+	e.fake.Start()
+	e.clock.Add(time.Minute)
+	if rec := poll(); rec.Header().Get("HX-Redirect") != "/" {
+		t.Fatalf("back up: HX-Redirect %q, want /", rec.Header().Get("HX-Redirect"))
+	}
+	wantRedirect(t, b.get("/"), "/dashboard")
+}

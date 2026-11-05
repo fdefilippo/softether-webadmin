@@ -507,3 +507,47 @@ func TestServeLogsAdminIPIsolation(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+// T8: credentials never go in softether_url (they would be sent and logged
+// with every request): a URL with userinfo is refused, by serve and by
+// trust-server-cert, without echoing the secret.
+func TestSoftEtherURLWithUserinfoIsRefused(t *testing.T) {
+	const secret = "s3cr3t-pw"
+	for _, raw := range []string{
+		"https://admin:" + secret + "@127.0.0.1:5555/api/",
+		"https://" + secret + "@127.0.0.1:5555/api/",
+		"https://admin:" + secret + "@[::1/api/", // unparseable too
+	} {
+		err := validateSoftEtherURL(raw)
+		if err == nil {
+			t.Errorf("validateSoftEtherURL(%q) = nil", raw)
+			continue
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("error echoes the secret: %v", err)
+		}
+	}
+
+	cfg := config.Default()
+	cfg.Listen = "127.0.0.1:0"
+	cfg.SoftEtherURL = "https://admin:" + secret + "@127.0.0.1:5555/api/"
+	cfg.StateDir = filepath.Join(t.TempDir(), "state")
+	cfg.RuntimeDir = filepath.Join(t.TempDir(), "run")
+	logs := &lockedBuffer{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// If serve wrongly starts, stop it at once so that the test fails, not hangs.
+	err := serve(ctx, cfg, logs, func(net.Addr) { cancel() })
+	if err == nil {
+		t.Fatal("serve accepted a softether_url with userinfo")
+	}
+	if strings.Contains(err.Error(), secret) || strings.Contains(logs.String(), secret) {
+		t.Fatalf("secret leaked: err %v, logs %s", err, logs.String())
+	}
+
+	var out, errb bytes.Buffer
+	path := writeConfig(t, fmt.Sprintf("state_dir = %q\nsoftether_url = %q\n", t.TempDir(), cfg.SoftEtherURL))
+	if code := run([]string{"trust-server-cert", "--config", path}, &out, &errb); code != 1 || strings.Contains(errb.String(), secret) {
+		t.Fatalf("trust-server-cert: exit %d, stderr %q", code, errb.String())
+	}
+}

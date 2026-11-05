@@ -65,5 +65,33 @@ func Load(path string) (Config, error) {
 		sort.Strings(keys)
 		return Config{}, fmt.Errorf("config %s: unknown key(s): %s", path, strings.Join(keys, ", "))
 	}
+	if err := c.validate(); err != nil {
+		return Config{}, fmt.Errorf("config %s: %w", path, err)
+	}
 	return c, nil
+}
+
+// validate rejects values that would disable a protection: sessions that
+// never expire, a probe loop that spins, a login limiter that is off.
+func (c Config) validate() error {
+	for _, d := range []struct {
+		key string
+		v   time.Duration
+	}{
+		{"session_idle", c.SessionIdle},
+		{"session_max", c.SessionMax},
+		{"probe_interval", c.ProbeInterval},
+		{"login_window", c.LoginWindow},
+	} {
+		if d.v <= 0 {
+			return fmt.Errorf("%s must be positive, got %v", d.key, d.v)
+		}
+	}
+	if c.LoginMaxFailures <= 0 {
+		return fmt.Errorf("login_max_failures must be positive, got %d", c.LoginMaxFailures)
+	}
+	if c.SessionMax < c.SessionIdle {
+		return fmt.Errorf("session_max (%v) must not be shorter than session_idle (%v)", c.SessionMax, c.SessionIdle)
+	}
+	return nil
 }

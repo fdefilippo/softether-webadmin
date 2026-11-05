@@ -157,11 +157,19 @@ func parseFingerprint(s string) (string, error) {
 	return strings.ToLower(s), nil
 }
 
-// validateSoftEtherURL checks that raw is an https URL with a host.
+// validateSoftEtherURL checks that raw is an https URL with a host and no
+// user information. The errors never quote a URL that may hold credentials.
 func validateSoftEtherURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("softether_url %q: %v", raw, err)
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err // without the URL, which may hold credentials
+		}
+		return fmt.Errorf("softether_url is not a valid URL: %v", err)
+	}
+	if u.User != nil {
+		return errors.New("softether_url must not contain a user name or password: credentials are never taken from the URL")
 	}
 	if u.Scheme != "https" || u.Hostname() == "" {
 		return fmt.Errorf("softether_url %q: must be an https URL with a host, e.g. https://127.0.0.1:5555/api/", raw)

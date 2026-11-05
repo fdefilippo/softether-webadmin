@@ -91,9 +91,15 @@ func (s *Server) restrictAdminIP(w http.ResponseWriter, r *http.Request) {
 type statusData struct{ State string }
 
 // status is the htmx fragment polled by the "uncertain" page. It re-probes
-// when the last probe is older than statusMaxAge.
+// when the last probe is older than statusMaxAge. The "unreachable" page
+// polls it with from=unreachable: once the server answers again the browser
+// is sent to "/", which the gate routes.
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	st := s.probeIfStale(r.Context(), statusMaxAge)
+	if r.URL.Query().Get("from") == "unreachable" && st != softether.StateUnreachable {
+		s.redirect(w, r, "/")
+		return
+	}
 	s.rnd.Fragment(w, r, "status", statusData{State: st.String()})
 }
 

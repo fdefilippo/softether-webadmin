@@ -110,3 +110,28 @@ func TestLoadMissingFile(t *testing.T) {
 		t.Fatal("want error for missing file")
 	}
 }
+
+// T1: values that would disable a protection (sessions that never expire, a
+// probe loop that spins, a limiter that blocks or allows everything) are
+// refused when the file is loaded.
+func TestLoadRejectsNonsenseValues(t *testing.T) {
+	for name, content := range map[string]string{
+		"zero session_idle":          `session_idle = "0s"`,
+		"negative session_max":       `session_max = "-1h"`,
+		"zero probe_interval":        `probe_interval = "0s"`,
+		"negative login_window":      `login_window = "-15m"`,
+		"zero login_max_failures":    `login_max_failures = 0`,
+		"negative login_max_failure": `login_max_failures = -3`,
+		"session_max < session_idle": "session_idle = \"2h\"\nsession_max = \"1h\"",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(writeConfig(t, content+"\n")); err == nil {
+				t.Errorf("Load accepted %q", content)
+			}
+		})
+	}
+	// Equal idle and absolute timeouts are fine.
+	if _, err := Load(writeConfig(t, "session_idle = \"1h\"\nsession_max = \"1h\"\n")); err != nil {
+		t.Errorf("session_idle == session_max refused: %v", err)
+	}
+}
