@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"path"
 	"sort"
 	"strconv"
@@ -131,10 +132,23 @@ func LangHandler() http.Handler {
 	})
 }
 
-// safeNext returns next if it is a same-site absolute path, else "/".
+// safeNext returns a same-site absolute path/query derived from next, else
+// "/". Control characters (browsers strip tab, CR and LF from URLs, which can
+// turn "/\t/evil.example" into "//evil.example"), backslashes and anything
+// url.Parse rejects or reads as having a scheme, host, user or opaque part
+// are refused. The result is the parsed RequestURI, never the raw input.
 func safeNext(next string) string {
-	if strings.HasPrefix(next, "/") && !strings.HasPrefix(next, "//") && !strings.ContainsAny(next, "\\\r\n") {
-		return next
+	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.Contains(next, "\\") {
+		return "/"
 	}
-	return "/"
+	for i := 0; i < len(next); i++ {
+		if next[i] < 0x20 || next[i] == 0x7f {
+			return "/"
+		}
+	}
+	u, err := url.Parse(next)
+	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil || u.Opaque != "" || !strings.HasPrefix(u.Path, "/") {
+		return "/"
+	}
+	return u.RequestURI()
 }

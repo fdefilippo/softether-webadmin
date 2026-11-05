@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sort"
 	"strings"
 	"testing"
@@ -130,5 +131,38 @@ func TestLangHandler(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/lang?l=xx", nil))
 	if rec.Code != http.StatusBadRequest || len(rec.Result().Cookies()) != 0 {
 		t.Fatalf("unsupported language: code=%d", rec.Code)
+	}
+}
+
+func TestLangHandlerNextTable(t *testing.T) {
+	h := LangHandler()
+	for _, c := range []struct{ next, want string }{
+		{"/\t/evil.example", "/"},
+		{"/\v/x", "/"},
+		{"/\r/evil", "/"},
+		{"/\n/evil", "/"},
+		{"/\x00", "/"},
+		{"/\x7f", "/"},
+		{"//evil", "/"},
+		{"/\\evil", "/"},
+		{"https://evil", "/"},
+		{"evil.example", "/"},
+		{"", "/"},
+		{"/dashboard?x=1", "/dashboard?x=1"},
+		{"/vhubs", "/vhubs"},
+		{"/%09/evil", "/%09/evil"}, // literal percent-escape: stays a same-site path
+	} {
+		q := url.Values{"l": {"it"}, "next": {c.next}}.Encode()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "/lang?"+q, nil))
+		if loc := rec.Header().Get("Location"); loc != c.want {
+			t.Errorf("next=%q -> Location %q, want %q", c.next, loc, c.want)
+		}
+	}
+	// Raw query-encoded form of "/<TAB>/evil" as a browser/attacker would send it.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/lang?l=it&next=%2F%09%2Fevil.example", nil))
+	if loc := rec.Header().Get("Location"); loc != "/" {
+		t.Errorf("raw tab case -> %q, want /", loc)
 	}
 }
