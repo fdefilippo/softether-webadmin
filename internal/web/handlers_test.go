@@ -272,6 +272,14 @@ func TestSetupPasswordMismatchAndWeak(t *testing.T) {
 	wantBody(t, rec, e.tr("setup.password_mismatch"))
 	rec = b.postSetup(tok, "short", "short")
 	wantBody(t, rec, e.tr("setup.weak_password"))
+	long := strings.Repeat("è", 128) // 256 bytes: SoftEther keeps 255
+	rec = b.postSetup(tok, long, long)
+	wantBody(t, rec, e.tr("setup.long_password"))
+	rec = b.postSetup(tok, "a long password\x00tail", "a long password\x00tail")
+	wantBody(t, rec, e.tr("setup.invalid_password"))
+	if strings.Contains(e.audit.String(), long) {
+		t.Fatal("password in the audit log")
+	}
 	if e.fake.MethodCount("SetServerPassword") != 0 {
 		t.Fatal("password write reached the server")
 	}

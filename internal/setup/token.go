@@ -31,6 +31,12 @@ const (
 	// MinPasswordLen is the minimum length, in characters, of the new
 	// administrator password.
 	MinPasswordLen = 12
+	// MaxPasswordBytes is the maximum length, in bytes, of the new
+	// administrator password: SoftEther copies the password of the Basic
+	// Authorization header into a MAX_PASSWORD_LEN (255) byte buffer
+	// (Cedar/Admin.c HttpParseBasicAuthHeader), so a longer one could be set
+	// but would never match at login.
+	MaxPasswordBytes = 255
 )
 
 var (
@@ -45,6 +51,11 @@ var (
 	ErrUncertain = errors.New("setup: outcome of the password change is uncertain")
 	// ErrWeakPassword: the new password is shorter than MinPasswordLen characters.
 	ErrWeakPassword = errors.New("setup: password too weak")
+	// ErrPasswordTooLong: the new password is longer than MaxPasswordBytes bytes.
+	ErrPasswordTooLong = errors.New("setup: password too long")
+	// ErrPasswordInvalid: the new password contains a NUL character, which
+	// SoftEther would take as the end of the password at login.
+	ErrPasswordInvalid = errors.New("setup: password contains a NUL character")
 )
 
 // Manager owns the setup token. It is safe for concurrent use.
@@ -190,6 +201,12 @@ func (m *Manager) Complete(ctx context.Context, token, newPassword string) error
 	// Password policy: checked before any RPC, does not consume the token.
 	if utf8.RuneCountInString(newPassword) < MinPasswordLen {
 		return ErrWeakPassword
+	}
+	if len(newPassword) > MaxPasswordBytes {
+		return ErrPasswordTooLong
+	}
+	if strings.IndexByte(newPassword, 0) >= 0 {
+		return ErrPasswordInvalid
 	}
 
 	// 2. The server must still have an empty password.

@@ -58,6 +58,10 @@ func (s *Server) setupSubmit(w http.ResponseWriter, r *http.Request) {
 		s.setupFail(w, r, "setup.bad_token", "bad_token")
 	case errors.Is(err, setup.ErrWeakPassword):
 		s.setupFail(w, r, "setup.weak_password", "weak_password")
+	case errors.Is(err, setup.ErrPasswordTooLong):
+		s.setupFail(w, r, "setup.long_password", "long_password")
+	case errors.Is(err, setup.ErrPasswordInvalid):
+		s.setupFail(w, r, "setup.invalid_password", "invalid_password")
 	case errors.Is(err, setup.ErrAlreadyConfigured), errors.Is(err, setup.ErrNoToken):
 		if errors.Is(err, setup.ErrAlreadyConfigured) {
 			s.setState(softether.StatePasswordSet, nil)

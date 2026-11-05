@@ -393,3 +393,38 @@ func TestCompleteLostResponseButApplied(t *testing.T) {
 		t.Errorf("SetServerPassword received %d times, want 1 (no retry)", n)
 	}
 }
+
+// SoftEther copies the Basic-auth password into a MAX_PASSWORD_LEN (255)
+// byte buffer (Cedar/Admin.c HttpParseBasicAuthHeader), truncating anything
+// longer and stopping at a NUL: such a password could be set but never used
+// to log in. It is refused before any RPC, without consuming the token.
+func TestCompleteUnusablePassword(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	if err := e.mgr.Refresh(ctx, softether.StateEmptyPassword); err != nil {
+		t.Fatal(err)
+	}
+	tok := e.tokenFile(t)
+	before := e.fake.Requests()
+	// 128 runes, 256 bytes: the limit counts bytes.
+	if err := e.mgr.Complete(ctx, tok, strings.Repeat("è", 128)); !errors.Is(err, ErrPasswordTooLong) {
+		t.Fatalf("Complete(256 bytes) = %v, want ErrPasswordTooLong", err)
+	}
+	if err := e.mgr.Complete(ctx, tok, "a long password\x00tail"); !errors.Is(err, ErrPasswordInvalid) {
+		t.Fatalf("Complete(NUL) = %v, want ErrPasswordInvalid", err)
+	}
+	if e.fake.Requests() != before {
+		t.Error("an unusable password caused RPC traffic")
+	}
+	if !e.mgr.Active() {
+		t.Error("an unusable password consumed the token")
+	}
+	// Exactly MaxPasswordBytes bytes is accepted.
+	pw := strings.Repeat("è", 127) + "x"
+	if len(pw) != MaxPasswordBytes {
+		t.Fatalf("test password is %d bytes", len(pw))
+	}
+	if err := e.mgr.Complete(ctx, tok, pw); err != nil {
+		t.Fatalf("%d-byte password rejected: %v", MaxPasswordBytes, err)
+	}
+}

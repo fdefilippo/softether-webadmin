@@ -19,6 +19,8 @@
   "setup.submit": "Set the password",
   "setup.bad_token": "The setup token is not valid.",
   "setup.weak_password": "The password is too short: use at least 12 characters.",
+  "setup.long_password": "The password is too long: use at most 255 bytes (accented letters and other non-ASCII characters take 2 to 4 bytes each).",
+  "setup.invalid_password": "The password contains a character that cannot be used (NUL).",
   "setup.password_mismatch": "The two passwords do not match.",
   "setup.already_configured": "The server is already configured. Log in with the server administrator password.",
 
