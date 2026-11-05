@@ -64,6 +64,7 @@ func serve(ctx context.Context, cfg config.Config, logOut io.Writer, ready func(
 	// The one and only client of the process: it is shared by the prober, the
 	// setup manager and the handlers, so that trust on first use cannot race.
 	pins := rpc.PinStore{Path: filepath.Join(cfg.StateDir, pinFileName)}
+	logAdminIPIsolation(logger, cfg.AdminIPPath)
 	client := rpc.NewClient(cfg.SoftEtherURL, pins, true)
 	prober := softether.Prober{Client: client}
 	aud := audit.New(out)
@@ -128,6 +129,24 @@ func serve(ctx context.Context, cfg config.Config, logOut io.Writer, ready func(
 	stopProbe()
 	probeDone.Wait()
 	return runErr
+}
+
+// logAdminIPIsolation classifies adminip.txt and writes the result to the
+// journal (design 5.1): a warning, with the entries concerned, when the VPN
+// server can be administered from addresses other than loopback or when the
+// file cannot be read.
+func logAdminIPIsolation(logger *slog.Logger, path string) {
+	iso, err := softether.ClassifyAdminIP(path)
+	switch {
+	case err != nil:
+		logger.Warn("cannot read adminip.txt: isolation of the administration unknown", "path", path, "err", err.Error())
+	case iso.Missing:
+		logger.Warn("adminip.txt missing: any address may administer the VPN server", "path", path, "missing", true)
+	case !iso.Isolated:
+		logger.Warn("adminip.txt allows administration from non-loopback addresses", "path", path, "offending", iso.Offending, "ignored", iso.Ignored)
+	default:
+		logger.Info("adminip.txt restricts administration to loopback", "path", path, "ignored", iso.Ignored)
+	}
 }
 
 // loadCertificate returns the configured HTTPS certificate, or the

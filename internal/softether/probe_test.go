@@ -42,8 +42,8 @@ func TestProbeUnreachable(t *testing.T) {
 	fake, c := setup(t)
 	fake.Stop()
 	st, err := Prober{Client: c}.Probe(context.Background())
-	if st != StateUnreachable {
-		t.Fatalf("Probe = %v, %v; want StateUnreachable", st, err)
+	if st != StateUnreachable || !errors.Is(err, rpc.ErrUnreachable) {
+		t.Fatalf("Probe = %v, %v; want StateUnreachable with the cause", st, err)
 	}
 }
 

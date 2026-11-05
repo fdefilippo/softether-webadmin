@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"html"
 	"io"
 	"log/slog"
@@ -1024,4 +1025,104 @@ func TestLoginAfterExternalPasswordRemovalGoesToSetup(t *testing.T) {
 		t.Fatalf("login_succeeded audited:\n%s", e.audit.String())
 	}
 	wantRedirect(t, b.get("/dashboard"), "/setup")
+}
+
+// stateLogs returns the "vpn server state changed" records of the journal.
+func (e *env) stateLogs() []map[string]any {
+	e.t.Helper()
+	var out []map[string]any
+	for _, line := range strings.Split(e.audit.String(), "\n") {
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			e.t.Fatalf("bad log line %q: %v", line, err)
+		}
+		if m["msg"] == "vpn server state changed" {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// I3: every change of the server state is written to the journal once, with
+// the level and details of the new state; a repeated state is not.
+func TestStateTransitionsAreLoggedOnce(t *testing.T) {
+	e := configured(t)
+	ctx := context.Background()
+	e.srv.ProbeOnce(ctx) // same state again
+	want := func(n int, state, level string) map[string]any {
+		t.Helper()
+		logs := e.stateLogs()
+		if len(logs) != n {
+			t.Fatalf("%d state records, want %d:\n%s", len(logs), n, e.audit.String())
+		}
+		last := logs[n-1]
+		if last["state"] != state || last["level"] != level {
+			t.Fatalf("last state record = %v, want state %s level %s", last, state, level)
+		}
+		return last
+	}
+	want(1, "password-set", "INFO")
+
+	e.fake.Stop()
+	e.srv.ProbeOnce(ctx)
+	e.srv.ProbeOnce(ctx)
+	if rec := e.browser().get("/"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("GET / = %d", rec.Code)
+	}
+	if m := want(2, "unreachable", "WARN"); m["err"] == nil || m["err"] == "" {
+		t.Fatalf("unreachable record without the error: %v", m)
+	}
+	if n := strings.Count(e.audit.String(), `"level":"WARN"`); n != 1 {
+		t.Fatalf("%d warnings for one outage, want 1:\n%s", n, e.audit.String())
+	}
+
+	e.fake.Start()
+	e.srv.ProbeOnce(ctx)
+	want(3, "password-set", "INFO")
+
+	e.fake.SetPassword("")
+	e.srv.ProbeOnce(ctx)
+	e.srv.ProbeOnce(ctx)
+	want(4, "empty-password", "INFO")
+}
+
+func TestCertMismatchIsLoggedOnceWithFingerprints(t *testing.T) {
+	fake := rpctest.New(t)
+	dir := t.TempDir()
+	pins := rpc.PinStore{Path: filepath.Join(dir, "pin")}
+	wrong := strings.Repeat("ab", 32)
+	if err := pins.Save(wrong); err != nil {
+		t.Fatal(err)
+	}
+	e := newEnvWith(t, fake, pins, dir)
+	e.srv.ProbeOnce(context.Background())
+	e.srv.ProbeOnce(context.Background())
+	logs := e.stateLogs()
+	if len(logs) != 1 {
+		t.Fatalf("%d state records, want 1:\n%s", len(logs), e.audit.String())
+	}
+	m := logs[0]
+	if m["state"] != "cert-mismatch" || m["level"] != "WARN" || m["pinned"] != wrong || m["presented"] != rpc.Fingerprint(fake.Cert().Raw) {
+		t.Fatalf("record = %v", m)
+	}
+}
+
+// A probe abandoned because its context was cancelled (daemon shutdown) says
+// nothing about the server: no state change, no "unreachable" warning.
+func TestCancelledProbeChangesNothing(t *testing.T) {
+	e := configured(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if st := e.srv.ProbeOnce(ctx); st != softether.StatePasswordSet {
+		t.Fatalf("ProbeOnce = %v, want the last known state", st)
+	}
+	if st := e.stateNow(); st != softether.StatePasswordSet {
+		t.Fatalf("state = %v", st)
+	}
+	if strings.Contains(e.audit.String(), `"level":"WARN"`) {
+		t.Fatalf("warning for a cancelled probe:\n%s", e.audit.String())
+	}
 }

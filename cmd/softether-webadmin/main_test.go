@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -407,3 +408,102 @@ func TestServeRejectsHalfConfiguredTLS(t *testing.T) {
 		t.Error("serve accepted tls_cert without tls_key")
 	}
 }
+
+// serveBriefly starts serve with cfg, waits until it listens, stops it and
+// returns its logs.
+func serveBriefly(t *testing.T, cfg config.Config) string {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	logs := &lockedBuffer{}
+	ready := make(chan net.Addr, 1)
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, cfg, logs, func(a net.Addr) { ready <- a }) }()
+	select {
+	case <-ready:
+	case err := <-done:
+		t.Fatalf("serve returned early: %v\nlogs: %s", err, logs.String())
+	case <-time.After(10 * time.Second):
+		t.Fatal("serve not ready")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	return logs.String()
+}
+
+// adminIPRecords returns the log records about adminip.txt.
+func adminIPRecords(t *testing.T, logs string) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, line := range strings.Split(logs, "\n") {
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("bad log line %q: %v", line, err)
+		}
+		if msg, _ := m["msg"].(string); strings.Contains(msg, "adminip.txt") {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// I2 (design 5.1): adminip.txt is classified at startup and the result is
+// written to the journal: WARN when the administration is not limited to
+// loopback (or the file cannot be read), INFO when it is.
+func TestServeLogsAdminIPIsolation(t *testing.T) {
+	cases := []struct {
+		name    string
+		content *string // nil: missing; "<dir>": a directory (read error)
+		level   string
+		want    []string // substrings of the record
+	}{
+		{"isolated", ptr("127.0.0.1/32\n::1/128\n"), "INFO", nil},
+		{"missing", nil, "WARN", []string{`"missing":true`}},
+		{"not isolated", ptr("10.1.2.3/24\nbogus!\n127.0.0.1\n"), "WARN", []string{`"offending":["10.1.2.3/24"]`, `"ignored":["bogus!"]`}},
+		{"unreadable", ptr("<dir>"), "WARN", []string{`"err":`}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fake := rpctest.New(t)
+			dir := t.TempDir()
+			cfg := config.Default()
+			cfg.Listen = "127.0.0.1:0"
+			cfg.SoftEtherURL = fake.URL()
+			cfg.StateDir = filepath.Join(dir, "state")
+			cfg.RuntimeDir = filepath.Join(dir, "run")
+			cfg.AdminIPPath = filepath.Join(dir, "adminip.txt")
+			switch {
+			case c.content == nil:
+			case *c.content == "<dir>":
+				if err := os.Mkdir(cfg.AdminIPPath, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				if err := os.WriteFile(cfg.AdminIPPath, []byte(*c.content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			logs := serveBriefly(t, cfg)
+			recs := adminIPRecords(t, logs)
+			if len(recs) != 1 {
+				t.Fatalf("%d adminip.txt records, want 1:\n%s", len(recs), logs)
+			}
+			if recs[0]["level"] != c.level || recs[0]["path"] != cfg.AdminIPPath {
+				t.Fatalf("record = %v, want level %s and path %s", recs[0], c.level, cfg.AdminIPPath)
+			}
+			raw, _ := json.Marshal(recs[0])
+			for _, w := range c.want {
+				if !strings.Contains(string(raw), w) {
+					t.Errorf("record %s lacks %s", raw, w)
+				}
+			}
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }

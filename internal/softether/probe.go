@@ -47,8 +47,8 @@ type Prober struct {
 
 // Probe calls Test with an empty user name and a random password (32 random
 // bytes, hex). A server with an empty administrator password accepts any
-// credential; one with a password set refuses it. Only a certificate mismatch
-// and unexpected errors are returned as errors.
+// credential; one with a password set refuses it. StateCertMismatch and
+// StateUnreachable come with the error that caused them.
 func (p Prober) Probe(ctx context.Context) (State, error) {
 	var b [32]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -64,9 +64,7 @@ func (p Prober) Probe(ctx context.Context) (State, error) {
 		return StatePasswordSet, nil
 	case errors.As(err, &mm):
 		return StateCertMismatch, err
-	case errors.Is(err, rpc.ErrUnreachable):
-		return StateUnreachable, nil
-	default:
+	default: // unreachable, or an unexpected error
 		return StateUnreachable, err
 	}
 }

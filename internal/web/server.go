@@ -146,13 +146,41 @@ func (s *Server) optionalSession(next http.Handler) http.Handler {
 
 // --- probe state -----------------------------------------------------------
 
-func (s *Server) setState(st softether.State, mm *rpc.CertMismatchError) {
+// setState records st (cause is the error behind an unreachable state, mm
+// the fingerprints of a certificate mismatch) and writes it to the journal
+// when it differs from the previous one.
+func (s *Server) setState(st softether.State, mm *rpc.CertMismatchError, cause error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	prev, prevMM, wasProbed := s.state, s.mismatch, s.probed
 	s.state, s.probed, s.probedAt = st, true, s.d.Now()
 	s.mismatch = rpc.CertMismatchError{}
 	if st == softether.StateCertMismatch && mm != nil {
 		s.mismatch = *mm
+	}
+	changed := !wasProbed || prev != st || prevMM != s.mismatch
+	cur := s.mismatch
+	s.mu.Unlock()
+	if changed {
+		s.logState(st, cur, cause)
+	}
+}
+
+// logState writes a state change to the journal: INFO for a server that
+// answers, WARN (with the error, or the fingerprints) otherwise.
+func (s *Server) logState(st softether.State, mm rpc.CertMismatchError, cause error) {
+	const msg = "vpn server state changed"
+	l := s.d.Audit.Slog()
+	switch st {
+	case softether.StatePasswordSet, softether.StateEmptyPassword:
+		l.Info(msg, "state", st.String())
+	case softether.StateCertMismatch:
+		l.Warn(msg, "state", st.String(), "pinned", mm.Pinned, "presented", mm.Presented)
+	default:
+		errText := "unknown"
+		if cause != nil {
+			errText = cause.Error()
+		}
+		l.Warn(msg, "state", st.String(), "err", errText)
 	}
 }
 
@@ -164,16 +192,22 @@ func (s *Server) snapshot() (st softether.State, probed bool, at time.Time) {
 
 // ProbeOnce probes the VPN server, records the state, lets the setup manager
 // align the setup token with it and drops the expired sessions (so that they
-// do not keep a SoftEther password in memory). It returns the state.
+// do not keep a SoftEther password in memory). It returns the state. A probe
+// cut short by the cancellation of ctx (shutdown) changes nothing and returns
+// the last known state (unreachable if none).
 func (s *Server) ProbeOnce(ctx context.Context) softether.State {
 	st, err := s.d.Prober.Probe(ctx)
+	if errors.Is(ctx.Err(), context.Canceled) {
+		if last, probed, _ := s.snapshot(); probed {
+			return last
+		}
+		return softether.StateUnreachable
+	}
 	var mm *rpc.CertMismatchError
 	if st == softether.StateCertMismatch {
 		errors.As(err, &mm)
-	} else if err != nil {
-		s.d.Audit.Slog().Warn("probe failed", "err", err.Error())
 	}
-	s.setState(st, mm)
+	s.setState(st, mm, err)
 	if err := s.d.Setup.Refresh(ctx, st); err != nil {
 		s.d.Audit.Slog().Error("setup token refresh failed", "err", err.Error())
 	}
@@ -251,10 +285,10 @@ func (s *Server) observe(err error) (page string, ok bool) {
 	var mm *rpc.CertMismatchError
 	switch {
 	case errors.As(err, &mm):
-		s.setState(softether.StateCertMismatch, mm)
+		s.setState(softether.StateCertMismatch, mm, err)
 		return "/certmismatch", true
 	case errors.Is(err, rpc.ErrUnreachable):
-		s.setState(softether.StateUnreachable, nil)
+		s.setState(softether.StateUnreachable, nil, err)
 		return "/unreachable", true
 	}
 	return "", false

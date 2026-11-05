@@ -50,7 +50,7 @@ func (s *Server) setupSubmit(w http.ResponseWriter, r *http.Request) {
 	var mm *rpc.CertMismatchError
 	switch {
 	case err == nil:
-		s.setState(softether.StatePasswordSet, nil)
+		s.setState(softether.StatePasswordSet, nil, nil)
 		s.startSession(w, r, rpc.Credential{Username: "", Password: password})
 		s.audit(r, audit.Event{Action: "setup_completed", Role: "setup", Method: "SetServerPassword", Result: "ok"})
 		s.redirect(w, r, "/dashboard")
@@ -64,7 +64,7 @@ func (s *Server) setupSubmit(w http.ResponseWriter, r *http.Request) {
 		s.setupFail(w, r, "setup.invalid_password", "invalid_password")
 	case errors.Is(err, setup.ErrAlreadyConfigured), errors.Is(err, setup.ErrNoToken):
 		if errors.Is(err, setup.ErrAlreadyConfigured) {
-			s.setState(softether.StatePasswordSet, nil)
+			s.setState(softether.StatePasswordSet, nil, nil)
 		}
 		s.audit(r, audit.Event{Action: "setup_failed", Role: "setup", Result: "already_configured"})
 		s.redirect(w, r, "/login?notice=configured")
