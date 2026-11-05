@@ -203,11 +203,26 @@ func TestRealLoginAndLogout(t *testing.T) {
 		t.Fatalf("/dashboard after login = %d\n%s", rec.Code, rec.Body.String())
 	}
 
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("dashboard Cache-Control = %q, want no-store", cc)
+	}
+
 	m := csrfRe.FindStringSubmatch(rec.Body.String())
 	if m == nil {
 		t.Fatal("no csrf field in the dashboard (logout form)")
 	}
+	old := d.cookies[web.SessionCookie]
+	if old == "" {
+		t.Fatal("no session cookie before logout")
+	}
 	d.wantRedirect(d.do("POST", "/logout", url.Values{"csrf": {m[1]}}), "/login")
+	if _, ok := d.cookies[web.SessionCookie]; ok {
+		t.Error("logout did not clear the session cookie")
+	}
+
+	// Replay the old cookie (browser Back / a copied cookie): the server-side
+	// session must be gone, not just the cookie in the browser.
+	d.cookies[web.SessionCookie] = old
 	d.wantRedirect(d.do("GET", "/dashboard", nil), "/login")
 }
 
