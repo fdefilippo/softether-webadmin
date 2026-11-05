@@ -107,3 +107,25 @@ func TestSessionDoesNotLeakPassword(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionSweepDropsExpired(t *testing.T) {
+	clk := newClock()
+	st := NewSessionStore(30*time.Minute, 8*time.Hour, clk.Now)
+	old := st.Create(rpc.Credential{Password: "secret"}, "en")
+	clk.Add(20 * time.Minute)
+	fresh := st.Create(rpc.Credential{}, "en") // Create sweeps at most once a minute
+	clk.Add(15 * time.Minute)                  // old idle 35 min, fresh idle 15 min
+
+	st.Sweep()
+
+	st.mu.Lock()
+	_, oldThere := st.sessions[old.ID]
+	_, freshThere := st.sessions[fresh.ID]
+	st.mu.Unlock()
+	if oldThere {
+		t.Fatal("expired session still in memory after Sweep")
+	}
+	if !freshThere {
+		t.Fatal("live session was removed by Sweep")
+	}
+}

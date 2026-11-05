@@ -19,6 +19,9 @@ import (
 type Session struct {
 	ID, CSRF string
 	Cred     rpc.Credential
+	// Lang is the language negotiated at login. It is informational only:
+	// pages are always rendered in Negotiate(r), so that the swa_lang cookie
+	// takes effect immediately, even in an existing session.
 	Lang     string
 	Created  time.Time
 	LastSeen time.Time
@@ -107,6 +110,16 @@ func (st *SessionStore) Destroy(id string) {
 
 func (st *SessionStore) expired(s *Session, now time.Time) bool {
 	return now.Sub(s.LastSeen) > st.idle || now.Sub(s.Created) > st.max
+}
+
+// Sweep removes every expired session now. The probe loop calls it so that
+// sessions nobody presents again do not keep the SoftEther password in
+// memory until the next Create.
+func (st *SessionStore) Sweep() {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.sweepAt = time.Time{}
+	st.sweepLocked(st.now())
 }
 
 // sweepLocked drops expired sessions at most once a minute so that sessions

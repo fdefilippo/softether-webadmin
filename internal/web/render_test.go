@@ -1,7 +1,9 @@
 package web
 
 import (
+	"bytes"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -138,5 +140,40 @@ func TestEmbeddedAssets(t *testing.T) {
 	}
 	if _, err := fs.Stat(StaticFS(), "layout.html"); err == nil {
 		t.Error("templates must not be reachable through StaticFS")
+	}
+}
+
+func TestRenderLogsTemplateErrorWithoutData(t *testing.T) {
+	var logs bytes.Buffer
+	layout, _ := fs.ReadFile(assetsFS, "assets/templates/layout.html")
+	tpls := fstest.MapFS{
+		"layout.html": {Data: layout},
+		"bad.html":    {Data: []byte(`{{define "content"}}{{index .Data 5}}{{end}}`)},
+	}
+	sub, _ := fs.Sub(assetsFS, "assets/i18n")
+	cat, _ := LoadCatalogs(sub)
+	r, err := NewRenderer(cat, tpls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r = r.WithLogger(slog.New(slog.NewTextHandler(&logs, nil)))
+
+	rec := httptest.NewRecorder()
+	r.Page(rec, httptest.NewRequest("GET", "/x", nil), "bad", []string{"s3cret-value"})
+	if rec.Code != 500 {
+		t.Fatalf("code = %d, want 500", rec.Code)
+	}
+	if !strings.Contains(logs.String(), "bad") || strings.Contains(logs.String(), "s3cret-value") {
+		t.Fatalf("log must name the page and not contain data: %s", logs.String())
+	}
+}
+
+func TestRenderFragmentHasNoLayout(t *testing.T) {
+	r := testRenderer(t)
+	rec := httptest.NewRecorder()
+	r.Fragment(rec, httptest.NewRequest("GET", "/status", nil), "test", "hi")
+	body := rec.Body.String()
+	if !strings.Contains(body, `<p id="c">hi</p>`) || strings.Contains(body, "<html") {
+		t.Fatalf("fragment = %s", body)
 	}
 }
