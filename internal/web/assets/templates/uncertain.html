@@ -1,0 +1,7 @@
+{{define "content"}}
+<h1>{{$.T "uncertain.title"}}</h1>
+<p class="error" role="alert">{{$.T "uncertain.body"}}</p>
+<div id="status" hx-get="/status" hx-trigger="load, every 3s" hx-swap="outerHTML">
+  <p>{{$.T "uncertain.checking"}}</p>
+</div>
+{{end}}

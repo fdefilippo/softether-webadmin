@@ -1,0 +1,12 @@
+{{define "content"}}
+<h1>{{$.T "login.title"}}</h1>
+{{with .Data.Notice}}<p class="notice" role="status">{{$.T .}}</p>{{end}}
+{{with .Data.Error}}<p class="error" role="alert">{{$.T .}}</p>{{end}}
+<form method="post" action="/login" class="stack">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>{{$.T "login.password"}}
+    <input type="password" name="password" required autocomplete="current-password" autofocus>
+  </label>
+  <button type="submit">{{$.T "login.submit"}}</button>
+</form>
+{{end}}

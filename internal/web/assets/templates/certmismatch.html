@@ -1,0 +1,13 @@
+{{define "content"}}
+<h1>{{$.T "certmismatch.title"}}</h1>
+<p class="error" role="alert">{{$.T "certmismatch.body"}}</p>
+<dl>
+  <dt>{{$.T "certmismatch.pinned"}}</dt>
+  <dd><code>{{if .Data.Pinned}}{{.Data.Pinned}}{{else}}{{$.T "certmismatch.none"}}{{end}}</code></dd>
+  <dt>{{$.T "certmismatch.presented"}}</dt>
+  <dd><code>{{.Data.Presented}}</code></dd>
+</dl>
+<p>{{$.T "certmismatch.fix"}}</p>
+<pre><code>{{.Data.Command}}</code></pre>
+<p><a href="/">{{$.T "unreachable.retry"}}</a></p>
+{{end}}

@@ -6,3 +6,19 @@ body { margin: 0; }
 .tools { display: flex; align-items: center; gap: .75rem; }
 form.inline { display: inline; margin: 0; }
 main { padding: 1rem; max-width: 60rem; margin: 0 auto; }
+h1 { font-size: 1.4rem; }
+.stack { display: flex; flex-direction: column; gap: .75rem; max-width: 28rem; }
+.stack label { display: flex; flex-direction: column; gap: .25rem; }
+input[type=text], input[type=password] { padding: .4rem; font: inherit; }
+button { padding: .4rem .9rem; font: inherit; }
+.error { color: #b00020; font-weight: 600; }
+.notice { color: #1b5e20; font-weight: 600; }
+.banner { border: 1px solid #8886; border-left-width: .4rem; border-radius: .25rem; padding: .5rem 1rem; margin: 1rem 0; }
+.banner.warn { border-left-color: #e65100; }
+.banner.info { border-left-color: #1565c0; }
+.banner h2 { margin-top: 0; font-size: 1.1rem; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; }
+dt { font-weight: 600; }
+dd { margin: 0; }
+pre { overflow-x: auto; padding: .5rem; background: #8882; }
+@media (prefers-color-scheme: dark) { .error { color: #ff8a80; } .notice { color: #a5d6a7; } }

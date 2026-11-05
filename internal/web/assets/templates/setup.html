@@ -1,0 +1,18 @@
+{{define "content"}}
+<h1>{{$.T "setup.title"}}</h1>
+<p>{{$.T "setup.intro"}}</p>
+{{with .Data.Error}}<p class="error" role="alert">{{$.T .}}</p>{{end}}
+<form method="post" action="/setup" class="stack" autocomplete="off">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>{{$.T "setup.token"}}
+    <input type="text" name="token" required autocomplete="off" autocapitalize="characters" spellcheck="false">
+  </label>
+  <label>{{$.T "setup.password"}}
+    <input type="password" name="password" required minlength="12" autocomplete="new-password">
+  </label>
+  <label>{{$.T "setup.password2"}}
+    <input type="password" name="password2" required minlength="12" autocomplete="new-password">
+  </label>
+  <button type="submit">{{$.T "setup.submit"}}</button>
+</form>
+{{end}}

@@ -1,0 +1,22 @@
+{{define "content"}}
+{{if eq .Data.State "password-set"}}
+<div id="status" class="notice" role="status">
+  <p>{{$.T "status.password_set"}}</p>
+  <p><a href="/login">{{$.T "status.login"}}</a></p>
+</div>
+{{else if eq .Data.State "empty-password"}}
+<div id="status" class="error" role="status">
+  <p>{{$.T "status.empty_password"}}</p>
+  <p><a href="/setup">{{$.T "status.back_to_setup"}}</a></p>
+</div>
+{{else if eq .Data.State "cert-mismatch"}}
+<div id="status" class="error" role="status">
+  <p>{{$.T "status.cert_mismatch"}}</p>
+  <p><a href="/certmismatch">{{$.T "status.details"}}</a></p>
+</div>
+{{else}}
+<div id="status" hx-get="/status" hx-trigger="every 3s" hx-swap="outerHTML" role="status">
+  <p>{{$.T "status.unreachable"}}</p>
+</div>
+{{end}}
+{{end}}

@@ -1,0 +1,48 @@
+{{define "content"}}
+<h1>{{$.T "dashboard.title"}}</h1>
+
+{{with .Data.NoticeKey}}<p class="notice" role="status">{{$.T . $.Data.NoticeArg}}</p>{{end}}
+
+{{if .Data.IsolationErr}}
+<section class="banner warn" role="alert"><p>{{$.T "adminip.unreadable"}}</p></section>
+{{end}}
+
+{{if .Data.ShowRestrict}}
+<section class="banner warn" role="alert">
+  <h2>{{$.T "adminip.title"}}</h2>
+  {{if .Data.Isolation.Missing}}
+  <p>{{$.T "adminip.missing"}}</p>
+  {{else}}
+  <p>{{$.T "adminip.not_isolated"}}</p>
+  <ul>{{range .Data.Isolation.Offending}}<li><code>{{.}}</code></li>{{end}}</ul>
+  {{end}}
+  <form method="post" action="/adminip/restrict" class="stack">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label><input type="checkbox" name="confirm" value="yes" required> {{$.T "adminip.confirm"}}</label>
+    <button type="submit">{{$.T "adminip.restrict"}}</button>
+  </form>
+</section>
+{{end}}
+
+{{if .Data.Isolation.Ignored}}
+<section class="banner info" role="status">
+  <p>{{$.T "adminip.ignored"}}</p>
+  <ul>{{range .Data.Isolation.Ignored}}<li><code>{{.}}</code></li>{{end}}</ul>
+</section>
+{{end}}
+
+<h2>{{$.T "dashboard.server"}}</h2>
+<dl>
+  <dt>{{$.T "dashboard.product"}}</dt><dd>{{.Data.Info.ProductName}}</dd>
+  <dt>{{$.T "dashboard.version"}}</dt><dd>{{.Data.Info.Version}}</dd>
+  <dt>{{$.T "dashboard.build"}}</dt><dd>{{.Data.Info.Build}}</dd>
+  <dt>{{$.T "dashboard.host"}}</dt><dd>{{.Data.Info.Hostname}}</dd>
+  <dt>{{$.T "dashboard.os"}}</dt><dd>{{.Data.Info.OsName}}</dd>
+</dl>
+<h2>{{$.T "dashboard.status"}}</h2>
+<dl>
+  <dt>{{$.T "dashboard.hubs"}}</dt><dd>{{.Data.Status.NumHubs}}</dd>
+  <dt>{{$.T "dashboard.sessions"}}</dt><dd>{{.Data.Status.NumSessions}}</dd>
+  <dt>{{$.T "dashboard.started"}}</dt><dd>{{.Data.Status.StartTime}}</dd>
+</dl>
+{{end}}
