@@ -1,0 +1,46 @@
+# nfpm configuration, driven by packaging/build.sh which sets:
+#   VERSION  package version (deb/rpm-safe, see build.sh)
+#   ARCH     Go architecture: amd64 or arm64 (nfpm maps it to x86_64/aarch64 for rpm)
+#   build/softether-webadmin  the compiled binary for ARCH (staged by build.sh)
+name: softether-webadmin
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+version_schema: none
+section: net
+priority: optional
+maintainer: softether-webadmin maintainers <noreply@users.noreply.github.com>
+description: |
+  Web administration interface for SoftEther VPN Server.
+  A small daemon that talks to the server's JSON-RPC API and serves a
+  localhost-only web UI, shipped with a hardened systemd unit.
+vendor: softether-webadmin
+homepage: https://github.com/fdefilippo/softether-webadmin
+license: Apache-2.0
+
+# Weak dependency only: the daemon starts without a local server and reports it.
+recommends:
+  - softether-vpnserver
+
+contents:
+  - src: build/softether-webadmin
+    dst: /usr/bin/softether-webadmin
+    file_info:
+      mode: 0755
+  - src: packaging/softether-webadmin.service
+    dst: /usr/lib/systemd/system/softether-webadmin.service
+    file_info:
+      mode: 0644
+  - src: packaging/config.toml
+    dst: /etc/softether-webadmin/config.toml
+    type: config|noreplace
+    file_info:
+      mode: 0644
+
+scripts:
+  postinstall: packaging/postinstall.sh
+  preremove: packaging/preremove.sh
+  postremove: packaging/postremove.sh
+
+rpm:
+  compression: gzip

@@ -1,0 +1,37 @@
+# softether-webadmin configuration.
+#
+# Every key is shown with its built-in default, commented out, so this file
+# changes nothing as shipped. Uncomment and edit only what you need, then run
+#   systemctl restart softether-webadmin
+# Durations use Go syntax such as "30m" or "8h". Unknown keys are rejected.
+
+# Address the web interface listens on. Keep it on loopback unless you put a
+# reverse proxy or firewall in front of it.
+#listen = "127.0.0.1:9443"
+
+# HTTPS certificate and key. Leave empty to use a self-signed certificate that
+# is generated under state_dir/tls.
+#tls_cert = ""
+#tls_key = ""
+
+# JSON-RPC endpoint of the local SoftEther VPN Server.
+#softether_url = "https://127.0.0.1:5555/api/"
+
+# SoftEther's remote-administration allow list.
+#adminip_path = "/var/lib/softether/adminip.txt"
+
+# Persistent state (pinned server certificate fingerprint, self-signed TLS
+# certificate) and runtime data (first-access setup token).
+#state_dir = "/var/lib/softether-webadmin"
+#runtime_dir = "/run/softether-webadmin"
+
+# Session expiry: after this much inactivity, and absolute maximum age.
+#session_idle = "30m"
+#session_max = "8h"
+
+# How often the server is probed for reachability and state.
+#probe_interval = "1m"
+
+# Login throttling: failures allowed within the window before lockout.
+#login_max_failures = 5
+#login_window = "15m"

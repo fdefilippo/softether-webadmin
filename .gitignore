@@ -5,3 +5,7 @@
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+
+# Package build output
+/dist/
+/build/

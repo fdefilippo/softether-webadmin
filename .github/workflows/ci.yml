@@ -31,3 +31,34 @@ jobs:
           go-version-file: go.mod
       - name: Integration tests (real SoftEther VPN Server container)
         run: go test -tags integration ./test/integration/... -v -count=1
+
+  package:
+    runs-on: ubuntu-24.04
+    needs: [test]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags, for the package version
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build deb and rpm (amd64, arm64)
+        run: |
+          packaging/build.sh amd64
+          packaging/build.sh arm64
+      - name: Install test, deb on debian:trixie
+        run: packaging/test-in-container.sh debian:trixie dist/softether-webadmin_*_amd64.deb
+      - name: Install test, rpm on Rocky Linux 8
+        run: packaging/test-in-container.sh rockylinux/rockylinux:8 dist/softether-webadmin-*.x86_64.rpm
+      - name: Install test, rpm on Rocky Linux 9
+        run: packaging/test-in-container.sh rockylinux/rockylinux:9 dist/softether-webadmin-*.x86_64.rpm
+      - name: Install test, rpm on Rocky Linux 10
+        run: packaging/test-in-container.sh rockylinux/rockylinux:10 dist/softether-webadmin-*.x86_64.rpm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: softether-webadmin-packages
+          path: dist/*
+          if-no-files-found: error
