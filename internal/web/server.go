@@ -26,6 +26,9 @@ const (
 	// setupTimeout bounds setup.Manager.Complete, which runs detached from
 	// the request context.
 	setupTimeout = 60 * time.Second
+	// probeTimeout bounds an on-demand probe (it is detached from the
+	// request that triggered it).
+	probeTimeout = 15 * time.Second
 
 	roleServerAdmin = "server_admin"
 )
@@ -91,10 +94,10 @@ func NewServer(d Deps) *Server {
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(StaticFS())))
 	mux.Handle("GET /lang", LangHandler())
 	mux.Handle("GET /{$}", http.HandlerFunc(s.root))
-	mux.Handle("GET /setup", s.pre.protect(http.HandlerFunc(s.setupForm)))
-	mux.Handle("POST /setup", s.pre.protect(http.HandlerFunc(s.setupSubmit)))
-	mux.Handle("GET /login", s.pre.protect(http.HandlerFunc(s.loginForm)))
-	mux.Handle("POST /login", s.pre.protect(http.HandlerFunc(s.loginSubmit)))
+	mux.Handle("GET /setup", s.preForm("setup", http.HandlerFunc(s.setupForm)))
+	mux.Handle("POST /setup", s.preForm("setup", http.HandlerFunc(s.setupSubmit)))
+	mux.Handle("GET /login", s.preForm("login", http.HandlerFunc(s.loginForm)))
+	mux.Handle("POST /login", s.preForm("login", http.HandlerFunc(s.loginSubmit)))
 	mux.Handle("POST /logout", auth(s.logout))
 	mux.Handle("GET /dashboard", auth(s.dashboard))
 	mux.Handle("POST /adminip/restrict", auth(s.restrictAdminIP))
@@ -104,6 +107,16 @@ func NewServer(d Deps) *Server {
 
 	s.handler = SecurityHeaders(limitBody(s.gate(mux)))
 	return s
+}
+
+// preForm protects a form page outside RequireSession with the pre-session
+// CSRF check. When the check fails (expired token, daemon restarted, cookie
+// blocked) the form is shown again with a fresh token and a localized
+// message, status 403.
+func (s *Server) preForm(page string, h http.Handler) http.Handler {
+	return s.pre.protect(h, func(w http.ResponseWriter, r *http.Request) {
+		s.rnd.PageStatus(w, r, http.StatusForbidden, page, formData{Error: "csrf.expired"})
+	})
 }
 
 // ServeHTTP implements http.Handler.
@@ -196,7 +209,12 @@ func (s *Server) probeIfStale(ctx context.Context, maxAge time.Duration) softeth
 	if st, probed, at := s.snapshot(); probed && s.d.Now().Sub(at) <= maxAge {
 		return st
 	}
-	return s.ProbeOnce(ctx)
+	// The probe serves every visitor and updates the shared state: it must
+	// not be cut short (and so report "unreachable") because the browser
+	// that happened to trigger it went away.
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), probeTimeout)
+	defer cancel()
+	return s.ProbeOnce(pctx)
 }
 
 // currentState is the state used for routing. A healthy server (password
@@ -214,6 +232,9 @@ func (s *Server) currentState(ctx context.Context) softether.State {
 // unreachable or presents another certificate, and reports whether err was
 // one of the two.
 func (s *Server) observe(err error) (page string, ok bool) {
+	if errors.Is(err, context.Canceled) {
+		return "", false // the caller went away: says nothing about the server
+	}
 	var mm *rpc.CertMismatchError
 	switch {
 	case errors.As(err, &mm):
@@ -300,8 +321,14 @@ func (s *Server) audit(r *http.Request, e audit.Event) {
 //     password it holds is no longer valid) and the user goes to /login;
 //   - unreachable server or certificate mismatch: the safety pages; the
 //     session stays valid;
-//   - anything else: a plain 502.
+//   - anything else: a plain 502;
+//   - a request that was itself aborted by the client changes nothing.
 func (s *Server) failRPC(w http.ResponseWriter, r *http.Request, sess *Session, method string, err error) {
+	if r.Context().Err() != nil {
+		// The browser disconnected: nobody to answer, and the failure says
+		// nothing about the server, so the shared state is left alone.
+		return
+	}
 	if errors.Is(err, rpc.ErrUnauthorized) && sess != nil {
 		s.d.Sessions.Destroy(sess.ID)
 		ClearSessionCookie(w)

@@ -18,17 +18,16 @@ type dashboardData struct {
 	// ShowRestrict: the "restrict to loopback" banner is shown (file missing
 	// or not isolated).
 	ShowRestrict bool
-	// NoticeKey/NoticeArg: result of a POST, a catalog key and its argument.
-	NoticeKey string
-	NoticeArg string
+	// Notice is the localized result message of a POST, or "".
+	Notice string
 }
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	sess, _ := SessionFrom(r.Context())
-	s.renderDashboard(w, r, sess, "", "")
+	s.renderDashboard(w, r, sess, "")
 }
 
-func (s *Server) renderDashboard(w http.ResponseWriter, r *http.Request, sess *Session, noticeKey, noticeArg string) {
+func (s *Server) renderDashboard(w http.ResponseWriter, r *http.Request, sess *Session, notice string) {
 	info, err := s.d.Client.GetServerInfo(r.Context(), sess.Cred)
 	if err != nil {
 		s.failRPC(w, r, sess, "GetServerInfo", err)
@@ -39,7 +38,7 @@ func (s *Server) renderDashboard(w http.ResponseWriter, r *http.Request, sess *S
 		s.failRPC(w, r, sess, "GetServerStatus", err)
 		return
 	}
-	d := dashboardData{Info: info, Status: status, NoticeKey: noticeKey, NoticeArg: noticeArg}
+	d := dashboardData{Info: info, Status: status, Notice: notice}
 	// Only the server administrator exists in this milestone, so the
 	// isolation banner is always for them.
 	iso, err := softether.ClassifyAdminIP(s.d.Cfg.AdminIPPath)
@@ -71,10 +70,10 @@ func (s *Server) restrictAdminIP(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, audit.Event{Action: "adminip_restricted", Role: roleServerAdmin, Result: "ok"})
 	if backup == "" {
-		s.renderDashboard(w, r, sess, "adminip.done_nobackup", "")
+		s.renderDashboard(w, r, sess, s.text(r, "adminip.done_nobackup"))
 		return
 	}
-	s.renderDashboard(w, r, sess, "adminip.done", backup)
+	s.renderDashboard(w, r, sess, s.text(r, "adminip.done", backup))
 }
 
 // --- pages without a session requirement ----------------------------------

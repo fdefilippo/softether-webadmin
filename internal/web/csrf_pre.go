@@ -58,25 +58,40 @@ func (p *preCSRF) issue() string {
 	return payload + "." + p.sign(payload)
 }
 
-// valid reports whether tok carries a correct signature and has not expired.
-func (p *preCSRF) valid(tok string) bool {
+// expiry returns the expiry time of a validly signed token.
+func (p *preCSRF) expiry(tok string) (time.Time, bool) {
 	i := strings.LastIndexByte(tok, '.')
 	if i < 0 {
-		return false
+		return time.Time{}, false
 	}
 	payload, sig := tok[:i], tok[i+1:]
 	if !hmac.Equal([]byte(sig), []byte(p.sign(payload))) {
-		return false
+		return time.Time{}, false
 	}
 	expStr, _, _ := strings.Cut(payload, ".")
 	exp, err := strconv.ParseInt(expStr, 10, 64)
-	return err == nil && p.now().Unix() < exp
+	if err != nil {
+		return time.Time{}, false
+	}
+	return time.Unix(exp, 0), true
 }
 
-// token returns the request's valid pre-session token, or sets a new cookie.
+// valid reports whether tok carries a correct signature and has not expired.
+func (p *preCSRF) valid(tok string) bool {
+	exp, ok := p.expiry(tok)
+	return ok && p.now().Before(exp)
+}
+
+// token returns the request's pre-session token, or sets a new cookie when
+// there is none, it is invalid, or less than half of its lifetime is left
+// (so that a form rendered long after the first visit still gets a fresh
+// token; forms open in other tabs then need a reload, which the localized
+// "form expired" page covers).
 func (p *preCSRF) token(w http.ResponseWriter, r *http.Request) string {
-	if c, err := r.Cookie(PreCSRFCookie); err == nil && p.valid(c.Value) {
-		return c.Value
+	if c, err := r.Cookie(PreCSRFCookie); err == nil {
+		if exp, ok := p.expiry(c.Value); ok && exp.Sub(p.now()) > preCSRFTTL/2 {
+			return c.Value
+		}
 	}
 	tok := p.issue()
 	http.SetCookie(w, &http.Cookie{
@@ -96,8 +111,10 @@ func (p *preCSRF) page(next http.Handler) http.Handler {
 }
 
 // protect rejects unsafe requests whose "csrf" field does not match a valid
-// pre-session cookie. Safe methods pass (and get a token for their form).
-func (p *preCSRF) protect(next http.Handler) http.Handler {
+// pre-session cookie by calling failed, with a fresh token in the context so
+// that failed can re-render the form. Safe methods pass (and get a token for
+// their form).
+func (p *preCSRF) protect(next http.Handler, failed http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet, http.MethodHead, http.MethodOptions:
@@ -108,7 +125,7 @@ func (p *preCSRF) protect(next http.Handler) http.Handler {
 		field := r.PostFormValue("csrf")
 		if err != nil || !p.valid(c.Value) || field == "" ||
 			subtle.ConstantTimeCompare([]byte(field), []byte(c.Value)) != 1 {
-			http.Error(w, "forbidden", http.StatusForbidden)
+			failed(w, r.WithContext(contextWithPreCSRF(r, p.token(w, r))))
 			return
 		}
 		// Keep the token in the context so that a re-rendered form (error

@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -231,5 +233,39 @@ func TestClientIP(t *testing.T) {
 	req.RemoteAddr = "garbage"
 	if got := ClientIP(req); got != "garbage" {
 		t.Fatalf("ClientIP = %q", got)
+	}
+}
+
+func TestLoginLimiterBeginIsAtomic(t *testing.T) {
+	clk := newClock()
+	l := NewLoginLimiter(3, time.Minute, clk.Now)
+	var granted atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if l.Begin("1.2.3.4") {
+				granted.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if granted.Load() != 3 {
+		t.Fatalf("Begin granted %d attempts, want exactly 3", granted.Load())
+	}
+	if l.Allow("1.2.3.4") {
+		t.Fatal("Allow must be false once the window is full")
+	}
+	l.Cancel("1.2.3.4")
+	if !l.Begin("1.2.3.4") || l.Begin("1.2.3.4") {
+		t.Fatal("Cancel must free exactly one slot")
+	}
+	l.Reset("1.2.3.4")
+	if !l.Begin("1.2.3.4") {
+		t.Fatal("Reset must clear the window")
+	}
+	if !l.Begin("5.6.7.8") {
+		t.Fatal("other IPs are independent")
 	}
 }

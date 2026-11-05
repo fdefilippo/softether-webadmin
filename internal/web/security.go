@@ -80,7 +80,7 @@ func CSRF(next http.Handler) http.Handler {
 		}
 		s, ok := SessionFrom(r.Context())
 		if !ok {
-			http.Error(w, "forbidden", http.StatusForbidden)
+			forbidden(w, r)
 			return
 		}
 		tok := r.Header.Get("X-CSRF-Token")
@@ -88,11 +88,24 @@ func CSRF(next http.Handler) http.Handler {
 			tok = r.PostFormValue("csrf")
 		}
 		if tok == "" || subtle.ConstantTimeCompare([]byte(tok), []byte(s.CSRF)) != 1 {
-			http.Error(w, "forbidden", http.StatusForbidden)
+			forbidden(w, r)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+var embeddedCatalog = sync.OnceValue(func() Catalog {
+	c, err := EmbeddedCatalogs()
+	if err != nil {
+		panic("web: " + err.Error()) // a build error, not a runtime condition
+	}
+	return c
+})
+
+// forbidden answers a failed CSRF check with a localized plain-text 403.
+func forbidden(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, embeddedCatalog().T(Negotiate(r), "error.forbidden"), http.StatusForbidden)
 }
 
 // ClientIP is the peer address of the request. X-Forwarded-For is
@@ -147,6 +160,34 @@ func (l *LoginLimiter) Allow(ip string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return len(l.recentLocked(ip, l.now())) < l.max
+}
+
+// Begin atomically reserves a login attempt for ip: it refuses (false) when
+// the window already holds max attempts, otherwise it records one and returns
+// true. Unlike Allow followed by Fail, parallel requests cannot all pass the
+// check before any of them is recorded. A successful login calls Reset, an
+// attempt that did not reach a verdict (server unreachable) calls Cancel.
+func (l *LoginLimiter) Begin(ip string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	ts := l.recentLocked(ip, now)
+	if len(ts) >= l.max {
+		return false
+	}
+	l.failures[ip] = append(ts, now)
+	return true
+}
+
+// Cancel gives back the attempt most recently reserved with Begin for ip.
+func (l *LoginLimiter) Cancel(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if ts := l.failures[ip]; len(ts) > 1 {
+		l.failures[ip] = ts[:len(ts)-1]
+	} else {
+		delete(l.failures, ip)
+	}
 }
 
 // Fail records a failed login attempt from ip.

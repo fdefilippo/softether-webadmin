@@ -31,7 +31,9 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip := ClientIP(r)
-	if !s.limiter.Allow(ip) {
+	// The attempt is reserved before the VPN server is called, so that
+	// parallel requests cannot exceed the limit.
+	if !s.limiter.Begin(ip) {
 		s.audit(r, audit.Event{Action: "login_rate_limited", Role: roleServerAdmin, Result: "rate_limited"})
 		s.rnd.PageStatus(w, r, http.StatusTooManyRequests, "login", formData{Error: "login.rate_limited"})
 		return
@@ -45,10 +47,11 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		s.audit(r, audit.Event{Action: "login_succeeded", Role: roleServerAdmin, Method: "Test", Result: "ok"})
 		s.redirect(w, r, "/dashboard")
 	case errors.Is(err, rpc.ErrUnauthorized):
-		s.limiter.Fail(ip)
+		// The reservation stays: it is the recorded failure.
 		s.audit(r, audit.Event{Action: "login_failed", Role: roleServerAdmin, Method: "Test", Result: "unauthorized"})
 		s.rnd.Page(w, r, "login", formData{Error: "login.failed"})
 	default:
+		s.limiter.Cancel(ip) // no verdict: not the user's failure
 		s.failRPC(w, r, nil, "Test", err)
 	}
 }

@@ -7,6 +7,8 @@
 
   "error.upstream": "Il VPN Server ha restituito un errore imprevisto.",
   "error.bad_request": "Richiesta non valida.",
+  "error.forbidden": "Richiesta rifiutata: token di sicurezza non valido. Ricaricare la pagina e riprovare.",
+  "csrf.expired": "Il modulo è scaduto o il suo token di sicurezza non è valido. Riprovare.",
   "error.internal": "Errore interno.",
 
   "setup.title": "Primo accesso: impostare la password di amministrazione",

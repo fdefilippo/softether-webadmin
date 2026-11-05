@@ -7,6 +7,8 @@
 
   "error.upstream": "The VPN server returned an unexpected error.",
   "error.bad_request": "Invalid request.",
+  "error.forbidden": "Request rejected: invalid security token. Reload the page and try again.",
+  "csrf.expired": "The form expired or its security token is not valid. Please try again.",
   "error.internal": "Internal error.",
 
   "setup.title": "First access: set the administrator password",

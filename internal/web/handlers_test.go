@@ -828,3 +828,160 @@ func TestAuditNoSecrets(t *testing.T) {
 		t.Errorf("audit lacks remote_ip:\n%s", out)
 	}
 }
+
+// --- fix round 1 -----------------------------------------------------------
+
+func TestLoginParallelAttemptsAreBounded(t *testing.T) {
+	e := configured(t)
+	const n = 30
+	bs := make([]*browser, n)
+	forms := make([]url.Values, n)
+	for i := range bs {
+		bs[i] = e.browser()
+		forms[i] = url.Values{"csrf": {bs[i].formCSRF("/login")}, "password": {"wrong"}}
+	}
+	before := e.fake.MethodCount("Test")
+	var wg sync.WaitGroup
+	codes := make([]int, n)
+	for i := range bs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			codes[i] = bs[i].post("/login", forms[i]).Code
+		}()
+	}
+	wg.Wait()
+	if got := e.fake.MethodCount("Test") - before; got > e.cfg.LoginMaxFailures {
+		t.Fatalf("%d parallel logins reached the VPN server, limit is %d", got, e.cfg.LoginMaxFailures)
+	}
+	limited := 0
+	for _, c := range codes {
+		if c == http.StatusTooManyRequests {
+			limited++
+		}
+	}
+	if limited != n-e.cfg.LoginMaxFailures {
+		t.Fatalf("%d requests got 429, want %d", limited, n-e.cfg.LoginMaxFailures)
+	}
+}
+
+func TestLoginUnreachableDoesNotConsumeAttempts(t *testing.T) {
+	e := configured(t)
+	b := e.browser()
+	csrf := b.formCSRF("/login")
+	e.fake.Stop()
+	for i := 0; i < 10; i++ {
+		b.post("/login", url.Values{"csrf": {csrf}, "password": {"x"}})
+	}
+	e.fake.Start()
+	e.srv.ProbeOnce(context.Background())
+	b2 := e.browser()
+	if rec := b2.login("wrong"); rec.Code != 200 {
+		t.Fatalf("code = %d, outage attempts must not count as failures", rec.Code)
+	}
+}
+
+func TestRestrictAdminIPWithoutExistingFile(t *testing.T) {
+	e := configured(t)
+	if err := os.Remove(e.adminIP); err != nil {
+		t.Fatal(err)
+	}
+	b := e.browser()
+	b.mustLogin(adminPassword)
+	rec := b.post("/adminip/restrict", url.Values{"csrf": {b.sessionCSRF()}, "confirm": {"yes"}})
+	if rec.Code != 200 {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	wantBody(t, rec, e.tr("adminip.done_nobackup"))
+	if strings.Contains(rec.Body.String(), "%!") {
+		t.Fatalf("formatting error in body:\n%s", rec.Body.String())
+	}
+	if iso, _ := softether.ClassifyAdminIP(e.adminIP); !iso.Isolated {
+		t.Fatal("file not created")
+	}
+}
+
+func (e *env) stateNow() softether.State {
+	st, _, _ := e.srv.snapshot()
+	return st
+}
+
+func TestAbortedRequestDoesNotChangeState(t *testing.T) {
+	e := configured(t)
+	b := e.browser()
+	b.mustLogin(adminPassword)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	serve := func(target string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", target, nil).WithContext(cancelled)
+		for k, v := range b.cookies {
+			req.AddCookie(&http.Cookie{Name: k, Value: v})
+		}
+		rec := httptest.NewRecorder()
+		e.srv.ServeHTTP(rec, req)
+		return rec
+	}
+
+	serve("/dashboard")
+	if st := e.stateNow(); st != softether.StatePasswordSet {
+		t.Fatalf("aborted /dashboard changed the state to %v", st)
+	}
+	if _, ok := e.srv.d.Sessions.Get(b.cookies[SessionCookie]); !ok {
+		t.Fatal("aborted request destroyed the session")
+	}
+
+	e.clock.Add(time.Minute) // make the stored probe stale
+	serve("/status")         // on-demand probe must not depend on the client
+	if st := e.stateNow(); st != softether.StatePasswordSet {
+		t.Fatalf("aborted /status changed the state to %v", st)
+	}
+	if rec := b.get("/dashboard"); rec.Code != 200 {
+		t.Fatalf("/dashboard after the aborted requests = %d", rec.Code)
+	}
+}
+
+func TestPreSessionCSRFFailureRerendersLocalizedForm(t *testing.T) {
+	e := configured(t)
+	b := e.browser()
+	b.cookies[LangCookie] = "it"
+	b.get("/login")
+	rec := b.post("/login", url.Values{"csrf": {"expired.token.x"}, "password": {adminPassword}})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("code = %d, want 403", rec.Code)
+	}
+	wantBody(t, rec, e.cat.T("it", "csrf.expired"), `name="password"`)
+	if strings.Contains(rec.Body.String(), "forbidden") {
+		t.Fatal("bare English text in the response")
+	}
+	// The fresh token in the page works with the fresh cookie.
+	m := csrfRe.FindStringSubmatch(rec.Body.String())
+	if m == nil {
+		t.Fatal("no fresh csrf field")
+	}
+	wantRedirect(t, b.post("/login", url.Values{"csrf": {m[1]}, "password": {adminPassword}}), "/dashboard")
+
+	e2 := newEnv(t)
+	e2.srv.ProbeOnce(context.Background())
+	b2 := e2.browser()
+	b2.get("/setup")
+	rec = b2.post("/setup", url.Values{"csrf": {"nope"}, "token": {"x"}})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("/setup: code = %d", rec.Code)
+	}
+	wantBody(t, rec, e2.tr("csrf.expired"), `name="token"`)
+}
+
+func TestSessionCSRFForbiddenIsLocalized(t *testing.T) {
+	e := configured(t)
+	b := e.browser()
+	b.mustLogin(adminPassword)
+	b.cookies[LangCookie] = "it"
+	rec := b.post("/logout", url.Values{})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), e.cat.T("it", "error.forbidden")) {
+		t.Fatalf("body = %q", rec.Body.String())
+	}
+}

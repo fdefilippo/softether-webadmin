@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -34,7 +35,7 @@ func testRenderer(t *testing.T) Renderer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return r
+	return r.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 func TestRenderAnonymousPage(t *testing.T) {
