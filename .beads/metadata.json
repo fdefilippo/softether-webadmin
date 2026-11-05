@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "softether_webadmin",
+  "project_id": "da9f12b5-b3e0-4de9-90e1-61257846ec02"
+}
