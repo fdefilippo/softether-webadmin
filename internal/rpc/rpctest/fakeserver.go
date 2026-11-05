@@ -31,13 +31,14 @@ type FakeServer struct {
 	leaf *x509.Certificate
 	addr string // host:port, fixed at creation
 
-	mu       sync.Mutex
-	password string
-	requests int
-	methods  map[string]int
-	stopOn   string       // method after which the server stops, "" for none
-	dropOn   string       // method after which the connection is dropped, "" for none
-	srv      *http.Server // nil while stopped
+	mu           sync.Mutex
+	password     string
+	requests     int
+	methods      map[string]int
+	stopOn       string       // method after which the server stops, "" for none
+	dropOn       string       // method after which the connection is dropped, "" for none
+	dropBeforeOn string       // method whose connection is dropped without applying it
+	srv          *http.Server // nil while stopped
 }
 
 // New starts a TLS fake server on 127.0.0.1 with an empty administrator
@@ -158,8 +159,18 @@ func (f *FakeServer) DropAfter(method string) {
 	f.mu.Unlock()
 }
 
-// MethodCount returns how many times a JSON-RPC method was received (after
-// authentication and parsing).
+// DropBefore arms a one-shot hook: when the (authenticated) server receives
+// method it does NOT apply it and aborts the connection without a response;
+// the server keeps running. A (forbidden) retry of the method would therefore
+// reach the server and be applied.
+func (f *FakeServer) DropBefore(method string) {
+	f.mu.Lock()
+	f.dropBeforeOn = method
+	f.mu.Unlock()
+}
+
+// MethodCount returns how many times a JSON-RPC method was received, counting
+// every well-formed request, including those refused with HTTP 401.
 func (f *FakeServer) MethodCount(method string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -205,28 +216,42 @@ func (f *FakeServer) handle(w http.ResponseWriter, r *http.Request) {
 	f.requests++
 	f.mu.Unlock()
 
+	// Parse first so that every request is counted by method, including
+	// those refused by the authentication check below.
+	var req request
+	decodeErr := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req)
+	if decodeErr == nil {
+		f.mu.Lock()
+		if f.methods == nil {
+			f.methods = map[string]int{}
+		}
+		f.methods[req.Method]++
+		f.mu.Unlock()
+	}
+
 	if !f.authorized(r) {
 		w.WriteHeader(http.StatusUnauthorized) // no JSON body, like vpnserver
 		return
 	}
-	var req request
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+	if decodeErr != nil {
 		reply(w, nil, nil, 1, "parse error")
 		return
 	}
 	f.mu.Lock()
-	if f.methods == nil {
-		f.methods = map[string]int{}
-	}
-	f.methods[req.Method]++
-	stop, drop := f.stopOn == req.Method, f.dropOn == req.Method
+	stop, drop, dropBefore := f.stopOn == req.Method, f.dropOn == req.Method, f.dropBeforeOn == req.Method
 	if stop {
 		f.stopOn = ""
 	}
 	if drop {
 		f.dropOn = ""
 	}
+	if dropBefore {
+		f.dropBeforeOn = ""
+	}
 	f.mu.Unlock()
+	if dropBefore {
+		panic(http.ErrAbortHandler) // not applied, connection killed
+	}
 	if stop || drop {
 		// Apply the method, discard the response, kill the connection.
 		f.dispatch(httptest.NewRecorder(), req)

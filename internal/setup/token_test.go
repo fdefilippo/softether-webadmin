@@ -314,6 +314,7 @@ func TestCompleteUncertain(t *testing.T) {
 		t.Fatal(err)
 	}
 	tok := e.tokenFile(t)
+	before := e.fake.Requests()
 	// The server applies the change, then dies without answering, and stays
 	// down: the outcome cannot be verified.
 	e.fake.StopAfter("SetServerPassword")
@@ -324,10 +325,45 @@ func TestCompleteUncertain(t *testing.T) {
 	if !e.mgr.Active() {
 		t.Error("token invalidated although the outcome is uncertain")
 	}
-	// No retry of the write.
-	e.fake.Start()
+	// Reached the server: probe + write only (the verification probe found it
+	// down). Exact counts; the retry guard proper is in
+	// TestCompleteUncertainNotApplied, where a retry could reach the server.
+	if got := e.fake.Requests() - before; got != 2 {
+		t.Errorf("server received %d requests, want 2", got)
+	}
 	if n := e.fake.MethodCount("SetServerPassword"); n != 1 {
 		t.Errorf("SetServerPassword received %d times, want 1", n)
+	}
+}
+
+// The write is lost before being applied and the server stays reachable: the
+// verification probe still sees an empty password, so the result is uncertain.
+// A retry of the write would reach the server and be counted, so this test
+// guards the "never retry a write" rule.
+func TestCompleteUncertainNotApplied(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	if err := e.mgr.Refresh(ctx, softether.StateEmptyPassword); err != nil {
+		t.Fatal(err)
+	}
+	tok := e.tokenFile(t)
+	before := e.fake.Requests()
+	e.fake.DropBefore("SetServerPassword")
+	err := e.mgr.Complete(ctx, tok, goodPassword)
+	if !errors.Is(err, ErrUncertain) {
+		t.Fatalf("Complete = %v, want ErrUncertain", err)
+	}
+	if !e.mgr.Active() {
+		t.Error("token invalidated although the outcome is uncertain")
+	}
+	if got := e.fake.Requests() - before; got != 3 { // probe + write + probe
+		t.Errorf("server received %d requests, want 3", got)
+	}
+	if n := e.fake.MethodCount("SetServerPassword"); n != 1 {
+		t.Errorf("SetServerPassword received %d times, want 1 (no retry)", n)
+	}
+	if st, _ := (softether.Prober{Client: e.client}).Probe(ctx); st != softether.StateEmptyPassword {
+		t.Errorf("password changed although the write was never applied: %v", st)
 	}
 }
 
@@ -340,6 +376,7 @@ func TestCompleteLostResponseButApplied(t *testing.T) {
 		t.Fatal(err)
 	}
 	tok := e.tokenFile(t)
+	before := e.fake.Requests()
 	e.fake.DropAfter("SetServerPassword") // applied, connection dropped, server stays up
 	if err := e.mgr.Complete(ctx, tok, goodPassword); err != nil {
 		t.Fatalf("Complete = %v, want success", err)
@@ -347,7 +384,12 @@ func TestCompleteLostResponseButApplied(t *testing.T) {
 	if e.mgr.Active() {
 		t.Error("token still active after success")
 	}
+	// A retried write (empty credential) would be refused with 401 but is
+	// still counted by the fake.
+	if got := e.fake.Requests() - before; got != 3 { // probe + write + probe
+		t.Errorf("server received %d requests, want 3", got)
+	}
 	if n := e.fake.MethodCount("SetServerPassword"); n != 1 {
-		t.Errorf("SetServerPassword received %d times, want 1", n)
+		t.Errorf("SetServerPassword received %d times, want 1 (no retry)", n)
 	}
 }
