@@ -6,6 +6,7 @@ import (
 
 	"github.com/fdefilippo/softether-webadmin/internal/audit"
 	"github.com/fdefilippo/softether-webadmin/internal/rpc"
+	"github.com/fdefilippo/softether-webadmin/internal/softether"
 )
 
 func (s *Server) loginForm(w http.ResponseWriter, r *http.Request) {
@@ -24,7 +25,8 @@ func (s *Server) loginForm(w http.ResponseWriter, r *http.Request) {
 
 // loginSubmit logs in the server administrator: only the password is asked
 // (empty user name). The per-IP limiter is consulted before the VPN server
-// is called, and reset on success.
+// is called, and reset on success. A successful Test is confirmed by a fresh
+// probe (design 5.2): with an empty password any credential succeeds.
 func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, s.text(r, "error.bad_request"), http.StatusBadRequest)
@@ -42,6 +44,15 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	err := s.d.Client.Test(r.Context(), cred)
 	switch {
 	case err == nil:
+		// A server whose password was removed from outside accepts any
+		// credential, and the cached state may still say "password set":
+		// confirm with a fresh probe before trusting the success.
+		if st := s.probeNow(r.Context()); st != softether.StatePasswordSet {
+			s.limiter.Cancel(ip) // no verdict on the password
+			s.audit(r, audit.Event{Action: "login_refused", Role: roleServerAdmin, Method: "Test", Result: st.String()})
+			s.redirect(w, r, stateTarget(st))
+			return
+		}
 		s.limiter.Reset(ip)
 		s.startSession(w, r, cred)
 		s.audit(r, audit.Event{Action: "login_succeeded", Role: roleServerAdmin, Method: "Test", Result: "ok"})

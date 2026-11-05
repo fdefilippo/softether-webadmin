@@ -985,3 +985,35 @@ func TestSessionCSRFForbiddenIsLocalized(t *testing.T) {
 		t.Fatalf("body = %q", rec.Body.String())
 	}
 }
+
+// C1: the administrator password removed from outside (vpncmd
+// ServerPasswordSet with an empty password) while the cached state still says
+// "password set". SoftEther then accepts any credential, so a successful Test
+// proves nothing: the login must re-probe and must not open a session.
+func TestLoginAfterExternalPasswordRemovalGoesToSetup(t *testing.T) {
+	e := configured(t)
+	b := e.browser()
+	csrf := b.formCSRF("/login") // the cached state is still "password set"
+	e.fake.SetPassword("")
+	rec := b.post("/login", url.Values{"csrf": {csrf}, "password": {"anything at all"}})
+	wantRedirect(t, rec, "/setup")
+	if _, ok := b.cookies[SessionCookie]; ok {
+		t.Fatal("a session cookie was set")
+	}
+	e.srv.d.Sessions.mu.Lock()
+	n := len(e.srv.d.Sessions.sessions)
+	e.srv.d.Sessions.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d sessions created, want 0", n)
+	}
+	if st := e.stateNow(); st != softether.StateEmptyPassword {
+		t.Fatalf("state = %v, want empty-password", st)
+	}
+	if !e.srv.d.Setup.Active() {
+		t.Fatal("no setup token generated for the empty password")
+	}
+	if strings.Contains(e.audit.String(), `"action":"login_succeeded"`) {
+		t.Fatalf("login_succeeded audited:\n%s", e.audit.String())
+	}
+	wantRedirect(t, b.get("/dashboard"), "/setup")
+}

@@ -209,9 +209,22 @@ func (s *Server) probeIfStale(ctx context.Context, maxAge time.Duration) softeth
 	if st, probed, at := s.snapshot(); probed && s.d.Now().Sub(at) <= maxAge {
 		return st
 	}
-	// The probe serves every visitor and updates the shared state: it must
-	// not be cut short (and so report "unreachable") because the browser
-	// that happened to trigger it went away.
+	return s.probeDetached(ctx)
+}
+
+// probeNow probes right away, whatever the age of the last probe; it is used
+// where a cached state cannot be trusted (a successful login).
+func (s *Server) probeNow(ctx context.Context) softether.State {
+	s.probeMu.Lock()
+	defer s.probeMu.Unlock()
+	return s.probeDetached(ctx)
+}
+
+// probeDetached runs ProbeOnce bounded by probeTimeout. The probe serves
+// every visitor and updates the shared state: it must not be cut short (and
+// so report "unreachable") because the browser that happened to trigger it
+// went away. The caller holds probeMu.
+func (s *Server) probeDetached(ctx context.Context) softether.State {
 	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), probeTimeout)
 	defer cancel()
 	return s.ProbeOnce(pctx)
@@ -247,6 +260,20 @@ func (s *Server) observe(err error) (page string, ok bool) {
 	return "", false
 }
 
+// stateTarget is the only page reachable in state st, or "" when the server
+// is healthy (password set) and every page is.
+func stateTarget(st softether.State) string {
+	switch st {
+	case softether.StatePasswordSet:
+		return ""
+	case softether.StateEmptyPassword:
+		return "/setup"
+	case softether.StateCertMismatch:
+		return "/certmismatch"
+	}
+	return "/unreachable"
+}
+
 // gate routes by the last probed state (before any handler runs):
 //
 //   - empty password: everything goes to /setup;
@@ -264,15 +291,8 @@ func (s *Server) gate(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		target := ""
-		switch s.currentState(r.Context()) {
-		case softether.StateEmptyPassword:
-			target = "/setup"
-		case softether.StateCertMismatch:
-			target = "/certmismatch"
-		case softether.StateUnreachable:
-			target = "/unreachable"
-		default: // password set
+		target := stateTarget(s.currentState(r.Context()))
+		if target == "" { // password set
 			switch {
 			case p == "/setup" && r.Method != http.MethodPost:
 				s.redirect(w, r, "/login")
