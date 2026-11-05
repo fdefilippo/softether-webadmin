@@ -1,0 +1,8 @@
+/* Served from 'self': the CSP forbids inline styles. */
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+body { margin: 0; }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .5rem 1rem; border-bottom: 1px solid #8884; }
+.brand { font-weight: 600; }
+.tools { display: flex; align-items: center; gap: .75rem; }
+form.inline { display: inline; margin: 0; }
+main { padding: 1rem; max-width: 60rem; margin: 0 auto; }
