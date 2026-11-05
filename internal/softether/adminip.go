@@ -15,27 +15,41 @@ import (
 
 // Isolation is the result of classifying SoftEther's adminip.txt, which
 // restricts the source addresses allowed to administer the VPN server.
+// The semantics mirror Cedar/Admin.c CheckAdminSourceAddress.
 type Isolation struct {
 	// Missing is true when the file does not exist (no restriction at all).
 	Missing bool
-	// Isolated is true when the file exists and no valid entry lets a
+	// Isolated is true when the file exists and no entry can let a
 	// non-loopback host administer the server.
 	Isolated bool
 	// Offending lists the original text (comment stripped, trimmed) of every
-	// valid entry whose effective network is not entirely inside
-	// 127.0.0.0/8 or ::1/128.
+	// entry that lets, or may let, a host outside 127.0.0.0/8 and ::1
+	// administer the server: a valid entry whose effective network is not
+	// entirely loopback, a bare non-loopback IP, the "*" wildcard, and any
+	// unparseable spec that looks like an address (see ClassifyAdminIP).
 	Offending []string
-	// Ignored lists the non-empty lines SoftEther ignores because they are
-	// not valid "ip/mask" specs; they never match any host.
+	// Ignored lists the non-empty lines SoftEther ignores because their
+	// address spec is neither an address nor an "*"; they never match a host.
 	Ignored []string
 }
 
 // ClassifyAdminIP reads path and classifies it the way SoftEther parses it
-// (Cedar/Admin.c CheckAdminSourceAddress, Mayaqua/Network.c ParseIpAndMask46):
-// comments start at the first "#" or "//", fields are separated by spaces or
-// tabs, the first field must be "ip/mask" (mask dotted or a prefix length of
-// the same address family) and an optional second field names a Hub. An entry
-// matches a host when (host & mask) == (ip & mask).
+// (Cedar/Admin.c CheckAdminSourceAddress):
+//
+//   - comments start at the first "#" or "//"; "\n", "\r\n" and a lone "\r"
+//     end a line; fields are separated by spaces or tabs; an optional second
+//     field names a Hub (the line then applies to that Hub's administrators
+//     but still lets a remote host administer it, so it counts);
+//   - the first field is split on "/" dropping empty parts (as SoftEther's
+//     ParseToken does): two parts are "ip/mask", with a dotted/IPv6 mask of
+//     the same family or a decimal prefix length, and match a host when
+//     (host & mask) == (ip & mask); a single part is a bare IP, an exact
+//     host entry (/32 or /128);
+//   - "*" allows everyone;
+//   - a spec we cannot parse but that SoftEther's lenient StrToIP might
+//     accept (it starts with a digit or contains ':') is reported as
+//     Offending, because we cannot prove it is not an allow; any other
+//     garbage is Ignored.
 func ClassifyAdminIP(path string) (Isolation, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -45,9 +59,10 @@ func ClassifyAdminIP(path string) (Isolation, error) {
 		return Isolation{}, err
 	}
 	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
+	text := strings.ReplaceAll(string(data), "\r", "\n")
 
 	var iso Isolation
-	for _, line := range strings.Split(string(data), "\n") {
+	for _, line := range strings.Split(text, "\n") {
 		if i := strings.IndexByte(line, '#'); i >= 0 {
 			line = line[:i]
 		}
@@ -59,16 +74,39 @@ func ClassifyAdminIP(path string) (Isolation, error) {
 			continue
 		}
 		fields := strings.FieldsFunc(line, func(r rune) bool { return r == ' ' || r == '\t' })
-		e, ok := parseEntry(fields[0])
-		switch {
-		case !ok:
+		switch classifySpec(fields[0]) {
+		case specIgnored:
 			iso.Ignored = append(iso.Ignored, line)
-		case !e.insideLoopback():
+		case specOffending:
 			iso.Offending = append(iso.Offending, line)
 		}
 	}
 	iso.Isolated = len(iso.Offending) == 0
 	return iso, nil
+}
+
+type specClass int
+
+const (
+	specLoopback specClass = iota
+	specOffending
+	specIgnored
+)
+
+func classifySpec(spec string) specClass {
+	if spec == "*" {
+		return specOffending
+	}
+	if e, ok := parseEntry(spec); ok {
+		if e.insideLoopback() {
+			return specLoopback
+		}
+		return specOffending
+	}
+	if spec != "" && (spec[0] >= '0' && spec[0] <= '9' || strings.Contains(spec, ":")) {
+		return specOffending
+	}
+	return specIgnored
 }
 
 // entry is a valid adminip.txt address spec in 16-byte form. For IPv4 only
@@ -79,32 +117,42 @@ type entry struct {
 	mask [16]byte
 }
 
-// parseEntry parses "ip/mask" with exactly one slash. The mask is either a
-// decimal prefix length or a dotted/IPv6 mask of the same family as ip.
+// parseEntry parses an address spec: "ip/mask" or a bare IP (host entry).
+// Empty parts between slashes are dropped.
 func parseEntry(spec string) (entry, bool) {
-	ipStr, maskStr, found := strings.Cut(spec, "/")
-	if !found || strings.Contains(maskStr, "/") {
+	var parts []string
+	for _, p := range strings.Split(spec, "/") {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	if len(parts) != 1 && len(parts) != 2 {
 		return entry{}, false
 	}
-	a, err := netip.ParseAddr(ipStr)
+	a, err := netip.ParseAddr(parts[0])
 	if err != nil || a.Zone() != "" {
 		return entry{}, false
 	}
 	e := entry{v4: a.Is4()}
-	if isDecimal(maskStr) {
-		n, err := strconv.Atoi(maskStr)
+	base := 0
+	if e.v4 {
+		base = 12
+	}
+	switch {
+	case len(parts) == 1:
+		for i := 0; i < a.BitLen(); i++ {
+			e.mask[base+i/8] |= 0x80 >> (i % 8)
+		}
+	case isDecimal(parts[1]):
+		n, err := strconv.Atoi(parts[1])
 		if err != nil || n > a.BitLen() {
 			return entry{}, false
-		}
-		base := 0
-		if e.v4 {
-			base = 12
 		}
 		for i := 0; i < n; i++ {
 			e.mask[base+i/8] |= 0x80 >> (i % 8)
 		}
-	} else {
-		m, err := netip.ParseAddr(maskStr)
+	default:
+		m, err := netip.ParseAddr(parts[1])
 		if err != nil || m.Zone() != "" || m.Is4() != e.v4 {
 			return entry{}, false
 		}
