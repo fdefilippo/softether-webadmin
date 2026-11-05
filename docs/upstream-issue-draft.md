@@ -31,7 +31,7 @@ I'd like to propose a web-based administration console for SoftEther VPN Server.
   - phase 2 covers day-to-day hub management: users, groups, access lists, SecureNAT/DHCP, sessions and statistics.
 - **i18n:** English and Italian from the start, with message catalogs so more languages can be added.
 - **Packaging:** `softether-webadmin` deb/rpm with a systemd unit, built by CI like the server packages.
-- **Go client:** I'd extend `vpnserver-jsonrpc-codegen` to also emit a Go client.
+- **Go client:** a typed Go client is generated inside the webadmin repository for now. Extending `vpnserver-jsonrpc-codegen` to emit Go, and documenting the 15 missing RPCs, would follow as separate contributions.
 
 ### Where the work happens
 
